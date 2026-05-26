@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PianoSRS</title>
+  <link rel="stylesheet" href="styles.css" />
+  <!-- PDF.js v3.11.174 from cdnjs. The non-module build exposes the global
+       `pdfjsLib`, which works reliably when index.html is opened via file://
+       (ES-module imports from CDN tend to be blocked by CORS in that case). -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <h1 class="app-title">PianoSRS</h1>
+    <p class="app-tagline">Spaced repetition for piano practice</p>
+  </header>
+
+  <main class="app-main">
+    <aside class="sidebar" aria-label="Piece library">
+      <div class="sidebar-header">
+        <h2>Piece Library</h2>
+        <button id="add-piece-btn" class="btn btn-primary" type="button">
+          + Add piece
+        </button>
+        <!-- Hidden file input; triggered by the button above. -->
+        <input
+          id="pdf-file-input"
+          class="visually-hidden"
+          type="file"
+          accept="application/pdf,.pdf"
+          aria-hidden="true"
+          tabindex="-1"
+        />
+      </div>
+      <ul id="piece-list" class="piece-list" aria-live="polite">
+        <li class="piece-list-empty">
+          No pieces yet. Click <strong>+ Add piece</strong> to upload a PDF.
+        </li>
+      </ul>
+    </aside>
+
+    <section class="viewer" aria-label="Piece viewer">
+      <div id="viewer-placeholder" class="viewer-placeholder">
+        <h2>Welcome</h2>
+        <p>
+          Upload a PDF of a piano piece to get started, then select it from the
+          library to view the sheet music. Practice repetitions and review
+          scheduling are still being wired up — see ROADMAP.md.
+        </p>
+        <p class="viewer-hint">
+          Pieces you add are saved locally in your browser (IndexedDB) and
+          reload automatically on your next visit.
+        </p>
+      </div>
+      <div id="viewer-pdf" class="viewer-pdf" hidden>
+        <header class="viewer-pdf-header">
+          <h2 id="viewer-pdf-title" class="viewer-pdf-title"></h2>
+          <span id="viewer-pdf-meta" class="viewer-pdf-meta"></span>
+        </header>
+
+        <section id="sections-panel" class="sections-panel" aria-label="Sections" hidden>
+          <header class="sections-panel-header">
+            <h3>Sections</h3>
+            <button id="add-section-btn" class="btn" type="button">
+              + Add section
+            </button>
+          </header>
+
+          <form id="section-form" class="section-form" hidden novalidate>
+            <h4 id="section-form-title" class="section-form-title">New section</h4>
+            <div class="section-form-grid">
+              <label class="section-form-field section-form-field-name">
+                <span class="section-form-label">Name</span>
+                <input
+                  id="section-name-input"
+                  type="text"
+                  required
+                  maxlength="100"
+                  placeholder="e.g. Exposition"
+                  autocomplete="off"
+                />
+              </label>
+              <label class="section-form-field section-form-field-page">
+                <span class="section-form-label">Page</span>
+                <input
+                  id="section-page-input"
+                  type="number"
+                  min="1"
+                  step="1"
+                  required
+                  inputmode="numeric"
+                />
+              </label>
+              <label class="section-form-field section-form-field-measures">
+                <span class="section-form-label">Measures</span>
+                <input
+                  id="section-measures-input"
+                  type="text"
+                  maxlength="200"
+                  placeholder="e.g. mm. 17–32"
+                  autocomplete="off"
+                />
+              </label>
+            </div>
+            <p
+              id="section-form-error"
+              class="section-form-error"
+              role="alert"
+              hidden
+            ></p>
+            <div class="section-form-actions">
+              <button
+                id="section-form-submit"
+                type="submit"
+                class="btn btn-primary"
+              >
+                Save section
+              </button>
+              <button id="section-form-cancel" type="button" class="btn">
+                Cancel
+              </button>
+            </div>
+          </form>
+
+          <ul
+            id="section-list"
+            class="section-list"
+            aria-live="polite"
+          ></ul>
+        </section>
+
+        <div id="pdf-pages" class="pdf-pages" aria-live="polite"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <span id="app-status">Ready</span>
+    <span class="app-version">v0.4.0 &middot; dev</span>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

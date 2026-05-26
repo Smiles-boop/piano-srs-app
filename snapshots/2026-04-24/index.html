@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PianoSRS</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1 class="app-title">PianoSRS</h1>
+    <p class="app-tagline">Spaced repetition for piano practice</p>
+  </header>
+
+  <main class="app-main">
+    <aside class="sidebar" aria-label="Piece library">
+      <div class="sidebar-header">
+        <h2>Piece Library</h2>
+        <button id="add-piece-btn" class="btn btn-primary" type="button" disabled title="Coming in step 2">
+          + Add piece
+        </button>
+      </div>
+      <ul id="piece-list" class="piece-list" aria-live="polite">
+        <li class="piece-list-empty">
+          No pieces yet. PDF upload arrives in the next step.
+        </li>
+      </ul>
+    </aside>
+
+    <section class="viewer" aria-label="Piece viewer">
+      <div id="viewer-placeholder" class="viewer-placeholder">
+        <h2>Welcome</h2>
+        <p>
+          Select a piece from the library to view its sheet music and log
+          practice repetitions. Today your review queue will appear here.
+        </p>
+        <p class="viewer-hint">
+          This is an early development build — the layout is live, but PDF
+          rendering, sections, and review scheduling are still being wired up.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <span id="app-status">Ready</span>
+    <span class="app-version">v0.1.0 &middot; dev</span>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

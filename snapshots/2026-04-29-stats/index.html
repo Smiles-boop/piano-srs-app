@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PianoSRS</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <h1 class="app-title">PianoSRS</h1>
+    <p class="app-tagline">Spaced repetition for piano practice</p>
+  </header>
+
+  <main class="app-main">
+    <aside class="sidebar" aria-label="Piece library">
+      <div class="sidebar-header">
+        <h2>Piece Library</h2>
+        <button id="add-piece-btn" class="btn btn-primary" type="button">
+          + Add piece
+        </button>
+        <input
+          id="pdf-file-input" class="visually-hidden" type="file"
+          accept="application/pdf,.pdf" aria-hidden="true" tabindex="-1"
+        />
+      </div>
+      <ul id="piece-list" class="piece-list" aria-live="polite">
+        <li class="piece-list-empty">
+          No pieces yet. Click <strong>+ Add piece</strong> to upload a PDF.
+        </li>
+      </ul>
+    </aside>
+
+    <section class="viewer" aria-label="Piece viewer">
+      <div id="viewer-placeholder" class="viewer-placeholder">
+        <!-- Item 9: Progress stats panel -->
+        <section
+          id="stats-panel" class="stats-panel"
+          aria-label="Practice stats" hidden
+        >
+          <header class="stats-panel-header">
+            <h2>Progress</h2>
+            <span id="stats-panel-today" class="stats-panel-today"></span>
+          </header>
+          <ul id="stats-panel-tiles" class="stats-tiles" aria-live="polite">
+            <li class="stats-tile" id="stats-tile-streak">
+              <span class="stats-tile-value" id="stats-streak-value">0</span>
+              <span class="stats-tile-label">Day streak</span>
+              <span class="stats-tile-detail" id="stats-streak-detail"></span>
+            </li>
+            <li class="stats-tile" id="stats-tile-mastered">
+              <span class="stats-tile-value" id="stats-mastered-value">0</span>
+              <span class="stats-tile-label">Sections mastered</span>
+              <span class="stats-tile-detail" id="stats-mastered-detail"></span>
+            </li>
+            <li class="stats-tile" id="stats-tile-rated">
+              <span class="stats-tile-value" id="stats-rated-value">0</span>
+              <span class="stats-tile-label">Sections in rotation</span>
+              <span class="stats-tile-detail" id="stats-rated-detail"></span>
+            </li>
+          </ul>
+          <section
+            id="stats-per-piece" class="stats-per-piece"
+            aria-label="Per-piece retention" hidden
+          >
+            <h3 class="stats-per-piece-title">Per-piece retention</h3>
+            <ul id="stats-per-piece-list" class="stats-per-piece-list"></ul>
+          </section>
+        </section>
+
+        <section
+          id="review-queue-panel" class="review-queue-panel"
+          aria-label="Sections due for review today" hidden
+        >
+          <header class="review-queue-header">
+            <h2>Due today</h2>
+            <span id="review-queue-count" class="review-queue-count"></span>
+          </header>
+          <p class="review-queue-hint">Click a section to jump straight into practice.</p>
+          <ul id="review-queue-list" class="review-queue-list" aria-live="polite"></ul>
+        </section>
+
+        <div id="viewer-placeholder-welcome" class="viewer-placeholder-welcome">
+          <h2>Welcome</h2>
+          <p>
+            Upload a PDF of a piano piece to get started, then select it from the
+            library to view the sheet music. Once you've broken a piece into
+            sections and rated a few, your "Due today" queue and "Progress" panel
+            both appear here on every app open.
+          </p>
+          <p class="viewer-hint">
+            Pieces you add are saved locally in your browser (IndexedDB) and
+            reload automatically on your next visit.
+          </p>
+        </div>
+      </div>
+
+      <!-- (rest of viewer-pdf — unchanged from item 8 snapshot) -->
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <span id="app-status">Ready</span>
+    <span class="app-version">v0.9.0 &middot; dev</span>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,1290 @@
+/* PianoSRS — base styles
+ * Layout: header, main (sidebar + viewer), footer.
+ * Color palette is intentionally neutral; dark mode lands in roadmap item 11.
+ */
+
+:root {
+  --bg: #f7f7f5;
+  --surface: #ffffff;
+  --surface-alt: #f0efe9;
+  --border: #d9d6ce;
+  --text: #1f1d18;
+  --text-muted: #6b675d;
+  --accent: #6a4b2a;
+  --accent-contrast: #ffffff;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.04);
+  --shadow-page: 0 1px 2px rgba(0, 0, 0, 0.06), 0 4px 16px rgba(0, 0, 0, 0.08);
+  --radius: 6px;
+  --header-height: 64px;
+  --footer-height: 32px;
+  --sidebar-width: 280px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--text);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* Header */
+.app-header {
+  height: var(--header-height);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.app-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.app-tagline {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Main layout */
+.app-main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  min-height: 0;
+}
+
+/* Sidebar */
+.sidebar {
+  background: var(--surface-alt);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sidebar-header h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.piece-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.piece-list-empty {
+  padding: 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.piece-list-item {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1.3;
+  transition: background-color 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.piece-list-item:hover {
+  background: var(--surface);
+}
+
+.piece-list-item.active {
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.piece-list-item-title {
+  font-weight: 500;
+}
+
+.piece-list-item-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.sidebar-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+}
+
+.sidebar-footer .btn {
+  flex: 1;
+  font-size: 12px;
+}
+
+/* Viewer */
+.viewer {
+  overflow-y: auto;
+  padding: 32px;
+  background: var(--bg);
+}
+
+.viewer-placeholder {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.viewer-placeholder-welcome {
+  padding: 48px 32px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.viewer-placeholder-welcome h2 {
+  margin: 0 0 16px 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.viewer-placeholder-welcome p {
+  color: var(--text-muted);
+  line-height: 1.55;
+  margin: 0 0 12px 0;
+}
+
+.viewer-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border);
+}
+
+/* Progress stats panel (roadmap item 9). Sits at the top of the empty-state
+ * placeholder so the first thing the user sees on app open is "how am I
+ * doing right now?" — daily streak, sections mastered, sections in
+ * rotation, plus today's done-of-due summary and a per-piece retention
+ * list. Hidden until the user has at least one section in the library so
+ * a fresh app doesn't show a wall of zeros. */
+.stats-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 22px 16px 22px;
+  box-shadow: var(--shadow);
+}
+
+.stats-panel[hidden] {
+  display: none;
+}
+
+.stats-panel-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.stats-panel-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.stats-panel-today {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-panel-today.is-complete {
+  color: #2c6a2a;
+}
+
+.stats-tiles {
+  list-style: none;
+  margin: 0 0 4px 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.stats-tile {
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stats-tile-value {
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  line-height: 1.1;
+}
+
+.stats-tile-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.stats-tile-detail {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.stats-tile-detail:empty {
+  display: none;
+}
+
+.stats-per-piece {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.stats-per-piece[hidden] {
+  display: none;
+}
+
+.stats-per-piece-title {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.stats-per-piece-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stats-per-piece-row {
+  display: grid;
+  grid-template-columns: 1fr 90px 60px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+  font-size: 13px;
+}
+
+.stats-per-piece-title-cell {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stats-per-piece-bar {
+  height: 8px;
+  background: var(--surface-alt);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.stats-per-piece-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.stats-per-piece-pct {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  text-align: right;
+}
+
+@media (max-width: 720px) {
+  .stats-tiles {
+    grid-template-columns: 1fr;
+  }
+  .stats-per-piece-row {
+    grid-template-columns: 1fr 60px 50px;
+  }
+}
+
+/* Daily review queue (roadmap item 7). Sits above the welcome card on
+ * the empty-state placeholder, so the first thing the user sees on app
+ * open is what's due to practice. Hidden when the queue is empty so a
+ * fresh library doesn't show a misleading panel. */
+.review-queue-panel {
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 18px 22px 16px 22px;
+  box-shadow: var(--shadow);
+}
+
+.review-queue-panel[hidden] {
+  display: none;
+}
+
+.review-queue-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.review-queue-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.review-queue-count {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.review-queue-hint {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.review-queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.review-queue-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.review-queue-item:hover:not(:disabled) {
+  background: var(--surface);
+  border-color: var(--accent);
+}
+
+.review-queue-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.review-queue-item:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.review-queue-item-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-queue-item-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.review-queue-item-due {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.review-queue-item-due.is-overdue {
+  background: #f9e6e2;
+  color: #8a3018;
+  border-color: #e8b9ad;
+}
+
+.review-queue-item-due.is-due-today {
+  background: #fff4e2;
+  color: #8a5a18;
+  border-color: #e8c98a;
+}
+
+.review-queue-item-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.review-queue-item-progress {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* PDF viewer */
+.viewer-pdf {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.viewer-pdf-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.viewer-pdf-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.viewer-pdf-meta {
+  font-size: 13px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.pdf-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.pdf-page {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-page);
+  overflow: hidden;
+  position: relative;
+  max-width: 100%;
+}
+
+.pdf-page canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.pdf-page-label {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(31, 29, 24, 0.65);
+  color: #fff;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+.pdf-page-loading {
+  padding: 48px 24px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* Sections panel (roadmap item 4) */
+.sections-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px 12px 20px;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow);
+}
+
+.sections-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.sections-panel-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.section-form {
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+
+.section-form[hidden] {
+  display: none;
+}
+
+.section-form-title {
+  margin: 0 0 10px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.section-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 90px 1fr;
+  gap: 10px;
+}
+
+.section-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.section-form-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.section-form input {
+  font: inherit;
+  font-size: 14px;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  width: 100%;
+  min-width: 0;
+}
+
+.section-form input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+.section-form-error {
+  margin: 10px 0 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: #fbecec;
+  color: #8a2222;
+  font-size: 13px;
+  border: 1px solid #f0c8c8;
+}
+
+.section-form-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.section-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.section-list-empty {
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: var(--surface-alt);
+  border-radius: var(--radius);
+  border: 1px dashed var(--border);
+}
+
+.section-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 4px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+}
+
+.section-list-item:hover {
+  border-color: var(--border);
+  background: var(--surface-alt);
+}
+
+.section-list-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: transparent;
+  border: 0;
+  padding: 6px 10px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+  border-radius: var(--radius);
+  min-width: 0;
+}
+
+.section-list-main:hover {
+  background: var(--surface);
+}
+
+.section-list-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.section-list-name {
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.section-list-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.section-list-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-sm {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.btn-danger {
+  color: #8a2222;
+  border-color: #e0bfbf;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #fbecec;
+  border-color: #c97676;
+}
+
+.section-list-item.practicing {
+  border-color: var(--accent);
+  background: #fbf6ee;
+}
+
+.section-list-rep-badge {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.section-list-rep-badge-done {
+  background: #e6f1e1;
+  color: #355a26;
+  border-color: #bcd9b1;
+}
+
+/* "Next: May 4" pill on a section row (roadmap item 6). Sits next to the
+ * "X / 10 today" badge so the user can see at a glance when each section
+ * is scheduled to come back. Hidden until SRS has fired at least once. */
+.section-list-next-due {
+  display: inline-block;
+  margin-top: 4px;
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+}
+
+.section-list-next-due.is-due {
+  background: #fff4e2;
+  color: #8a5a18;
+  border-color: #e8c98a;
+  border-style: solid;
+}
+
+.btn-practice {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.btn-practice:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+/* Practice panel (roadmap item 5) */
+.practice-panel {
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 18px 20px 16px 20px;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow);
+}
+
+.practice-panel[hidden] {
+  display: none;
+}
+
+.practice-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.practice-panel-headings {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.practice-panel-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.practice-section-name {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.practice-section-meta {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.practice-counter {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.practice-count {
+  font-size: 40px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.practice-count-divider {
+  font-size: 22px;
+  color: var(--text-muted);
+}
+
+.practice-goal {
+  font-size: 22px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.practice-count-label {
+  margin-left: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.practice-progress-track {
+  height: 8px;
+  background: var(--surface-alt);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+}
+
+.practice-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.practice-progress-fill.is-complete {
+  background: #4f8a3c;
+}
+
+.practice-rep-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  padding: 22px 20px;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 600;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.05s ease,
+    border-color 0.15s ease;
+}
+
+.practice-rep-btn:hover:not(:disabled) {
+  background: #553a1e;
+  border-color: #553a1e;
+}
+
+.practice-rep-btn:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.practice-rep-btn:focus-visible {
+  outline: 3px solid #c4a37a;
+  outline-offset: 3px;
+}
+
+.practice-rep-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.practice-rep-btn.is-complete {
+  background: #4f8a3c;
+  border-color: #4f8a3c;
+  color: #fff;
+  opacity: 1;
+}
+
+.practice-rep-btn-icon {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.practice-status {
+  margin: 12px 0 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  font-size: 13px;
+  border: 1px solid var(--border);
+}
+
+/* SM-2 rating prompt (roadmap item 8). Replaces the auto-fired Good rating
+ * with a real Again / Hard / Good / Easy choice. Sits in-place between the
+ * rep button and the next-review card — once the user picks a rating, this
+ * panel hides and the next-review card takes over. The Good button is
+ * default-highlighted (visually emphasised + autofocused) so a one-click
+ * confirm flow is fast. */
+.practice-rating-prompt {
+  margin: 12px 0 0 0;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: #fbf6ee;
+  border: 1px solid #d8c294;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.practice-rating-prompt[hidden] {
+  display: none;
+}
+
+.practice-rating-prompt-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.practice-rating-prompt-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.practice-rating-prompt-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.practice-rating-prompt-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.practice-rating-buttons {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.practice-rating-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 10px;
+  font: inherit;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease,
+    box-shadow 0.15s ease;
+  min-width: 0;
+}
+
+.practice-rating-btn:hover:not(:disabled) {
+  background: var(--surface-alt);
+  border-color: var(--accent);
+}
+
+.practice-rating-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.practice-rating-btn:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.practice-rating-btn-name {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.practice-rating-btn-detail {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* Per-rating accent colors. Subtle — the names should remain glanceable but
+ * the visual hierarchy of "Again is bad / Easy is great" should be obvious. */
+.practice-rating-btn-again {
+  color: #8a3018;
+  border-color: #e8b9ad;
+}
+
+.practice-rating-btn-again:hover:not(:disabled) {
+  background: #f9e6e2;
+  border-color: #c97676;
+}
+
+.practice-rating-btn-hard {
+  color: #8a5a18;
+  border-color: #e8c98a;
+}
+
+.practice-rating-btn-hard:hover:not(:disabled) {
+  background: #fff4e2;
+  border-color: #b89042;
+}
+
+.practice-rating-btn-good {
+  color: #2f5121;
+  border-color: #c7dcb9;
+}
+
+.practice-rating-btn-good:hover:not(:disabled) {
+  background: #f0f6ec;
+  border-color: #4f8a3c;
+}
+
+/* Default-highlighted Good — the most common rating. Solid border + soft
+ * shadow makes it clearly the "I'll click this if I'm not sure" choice. */
+.practice-rating-btn-good.is-default {
+  background: #f0f6ec;
+  border-color: #4f8a3c;
+  box-shadow: 0 0 0 2px rgba(79, 138, 60, 0.18);
+}
+
+.practice-rating-btn-easy {
+  color: #1f3915;
+  border-color: #b9d8c5;
+}
+
+.practice-rating-btn-easy:hover:not(:disabled) {
+  background: #ecf5ef;
+  border-color: #4a8a6a;
+}
+
+/* SM-2 next-review card (roadmap item 6). Surfaces the freshly-computed
+ * next-due date right after the user crosses the rep goal — instant
+ * positive feedback that the schedule moved forward. */
+.practice-next-review {
+  margin: 12px 0 0 0;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: #f0f6ec;
+  color: #2f5121;
+  font-size: 13px;
+  line-height: 1.5;
+  border: 1px solid #c7dcb9;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.practice-next-review-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #4f8a3c;
+}
+
+.practice-next-review-date {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f3915;
+  font-variant-numeric: tabular-nums;
+}
+
+.practice-next-review-detail {
+  color: #4a6b3a;
+}
+
+.practice-secondary-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .section-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .section-list-item {
+    flex-wrap: wrap;
+  }
+  .section-list-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .practice-panel-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .practice-rep-btn {
+    padding: 18px 14px;
+    font-size: 16px;
+  }
+  .practice-rating-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Footer */
+.app-footer {
+  height: var(--footer-height);
+  padding: 0 24px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+/* Buttons */
+.btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--surface-alt);
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #553a1e;
+  border-color: #553a1e;
+  color: var(--accent-contrast);
+}
+
+/* Visually hidden but still focusable for assistive tech if needed. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Narrow screens — mobile polish comes in roadmap item 11, this is just a
+ * reasonable fallback so the layout doesn't collapse awkwardly. */
+@media (max-width: 720px) {
+  .app-main {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 40vh;
+  }
+  .viewer {
+    padding: 16px;
+  }
+}

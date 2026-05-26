@@ -1,0 +1,36 @@
+--- db.js: added after deletePiece() ---
++/**
++ * Rename a piece by updating its title in the IDB record.
++ * Uses get-then-put so the large pdfBlob stays intact.
++ */
++async function renamePiece(id, newTitle) {
++  const db = await openDb();
++  const store = piecesStore(db, 'readwrite');
++  const rec = await awaitRequest(store.get(id));
++  if (!rec) throw new Error(`Piece ${id} not found`);
++  rec.title = newTitle;
++  await awaitRequest(store.put(rec));
++}
+
+--- app.js: added rename button in renderPieceList(), before delBtn ---
++    const renameBtn = document.createElement('button');
++    renameBtn.className = 'piece-list-item-rename';
++    renameBtn.type = 'button';
++    renameBtn.title = 'Rename piece';
++    renameBtn.setAttribute('aria-label', `Rename ${piece.title}`);
++    renameBtn.textContent = '✎';
++    renameBtn.addEventListener('click', (e) => {
++      e.stopPropagation();
++      startInlineRename(li, piece);
++    });
++    li.appendChild(renameBtn);
+
+--- app.js: added startInlineRename() before titleFromFilename() ---
++function startInlineRename(li, piece) { ... } // ~55 lines, inline edit logic
+
+--- styles.css: merged .piece-list-item-rename with .piece-list-item-delete base ---
++.piece-list-item-rename, .piece-list-item-delete { ... shared base }
++.piece-list-item-rename:hover { accent color }
++.piece-rename-input { full-width inline input style }
+
+--- index.html + app.js: version bump 0.14.0 -> 0.15.0 ---

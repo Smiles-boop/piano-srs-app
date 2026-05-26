@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PianoSRS</title>
+  <link rel="stylesheet" href="styles.css" />
+  <!-- PDF.js v3.11.174 from cdnjs. The non-module build exposes the global
+       `pdfjsLib`, which works reliably when index.html is opened via file://
+       (ES-module imports from CDN tend to be blocked by CORS in that case). -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <h1 class="app-title">PianoSRS</h1>
+    <p class="app-tagline">Spaced repetition for piano practice</p>
+    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle dark mode">
+      <span class="theme-toggle-icon" aria-hidden="true">&#9790;</span>
+      <span class="theme-toggle-label">Dark</span>
+    </button>
+  </header>
+
+  <main class="app-main">
+    <aside class="sidebar" aria-label="Piece library">
+      <div class="sidebar-header">
+        <h2>Piece Library</h2>
+        <button id="add-piece-btn" class="btn btn-primary" type="button">
+          + Add piece
+        </button>
+        <!-- Hidden file input; triggered by the button above. -->
+        <input
+          id="pdf-file-input"
+          class="visually-hidden"
+          type="file"
+          accept="application/pdf,.pdf"
+          aria-hidden="true"
+          tabindex="-1"
+        />
+      </div>
+      <ul id="piece-list" class="piece-list" aria-live="polite">
+        <li class="piece-list-empty">
+          No pieces yet. Click <strong>+ Add piece</strong> to upload a PDF.
+        </li>
+      </ul>
+      <div class="sidebar-footer">
+        <button id="export-btn" class="btn btn-sm" type="button">
+          Export library
+        </button>
+        <button id="import-btn" class="btn btn-sm" type="button">
+          Import backup
+        </button>
+        <input
+          id="import-file-input"
+          class="visually-hidden"
+          type="file"
+          accept="application/json,.json"
+          aria-hidden="true"
+          tabindex="-1"
+        />
+      </div>
+    </aside>
+
+    <section class="viewer" aria-label="Piece viewer">
+      <div id="viewer-placeholder" class="viewer-placeholder">
+        <section
+          id="stats-panel"
+          class="stats-panel"
+          aria-label="Practice stats"
+          hidden
+        >
+          <header class="stats-panel-header">
+            <h2>Progress</h2>
+            <span id="stats-panel-today" class="stats-panel-today"></span>
+          </header>
+          <ul id="stats-panel-tiles" class="stats-tiles" aria-live="polite">
+            <li class="stats-tile" id="stats-tile-streak">
+              <span class="stats-tile-value" id="stats-streak-value">0</span>
+              <span class="stats-tile-label">Day streak</span>
+              <span class="stats-tile-detail" id="stats-streak-detail"></span>
+            </li>
+            <li class="stats-tile" id="stats-tile-mastered">
+              <span class="stats-tile-value" id="stats-mastered-value">0</span>
+              <span class="stats-tile-label">Sections mastered</span>
+              <span class="stats-tile-detail" id="stats-mastered-detail"></span>
+            </li>
+            <li class="stats-tile" id="stats-tile-rated">
+              <span class="stats-tile-value" id="stats-rated-value">0</span>
+              <span class="stats-tile-label">Sections in rotation</span>
+              <span class="stats-tile-detail" id="stats-rated-detail"></span>
+            </li>
+          </ul>
+          <section
+            id="stats-per-piece"
+            class="stats-per-piece"
+            aria-label="Per-piece retention"
+            hidden
+          >
+            <h3 class="stats-per-piece-title">Per-piece retention</h3>
+            <ul
+              id="stats-per-piece-list"
+              class="stats-per-piece-list"
+            ></ul>
+          </section>
+        </section>
+        <section
+          id="review-queue-panel"
+          class="review-queue-panel"
+          aria-label="Sections due for review today"
+          hidden
+        >
+          <header class="review-queue-header">
+            <h2>Due today</h2>
+            <span id="review-queue-count" class="review-queue-count"></span>
+          </header>
+          <p class="review-queue-hint">
+            Click a section to jump straight into practice.
+          </p>
+          <ul
+            id="review-queue-list"
+            class="review-queue-list"
+            aria-live="polite"
+          ></ul>
+        </section>
+        <div id="viewer-placeholder-welcome" class="viewer-placeholder-welcome">
+          <h2>Welcome</h2>
+          <p>
+            Upload a PDF of a piano piece to get started, then select it from the
+            library to view the sheet music. Once you've broken a piece into
+            sections and rated a few, your "Due today" queue appears here on
+            every app open.
+          </p>
+          <p class="viewer-hint">
+            Pieces you add are saved locally in your browser (IndexedDB) and
+            reload automatically on your next visit.
+          </p>
+        </div>
+      </div>
+      <div id="viewer-pdf" class="viewer-pdf" hidden>
+        <header class="viewer-pdf-header">
+          <h2 id="viewer-pdf-title" class="viewer-pdf-title"></h2>
+          <span id="viewer-pdf-meta" class="viewer-pdf-meta"></span>
+        </header>
+
+        <section id="sections-panel" class="sections-panel" aria-label="Sections" hidden>
+          <header class="sections-panel-header">
+            <h3>Sections</h3>
+            <button id="add-section-btn" class="btn" type="button">
+              + Add section
+            </button>
+          </header>
+
+          <form id="section-form" class="section-form" hidden novalidate>
+            <h4 id="section-form-title" class="section-form-title">New section</h4>
+            <div class="section-form-grid">
+              <label class="section-form-field section-form-field-name">
+                <span class="section-form-label">Name</span>
+                <input
+                  id="section-name-input"
+                  type="text"
+                  required
+                  maxlength="100"
+                  placeholder="e.g. Exposition"
+                  autocomplete="off"
+                />
+              </label>
+              <label class="section-form-field section-form-field-page">
+                <span class="section-form-label">Page</span>
+                <input
+                  id="section-page-input"
+                  type="number"
+                  min="1"
+                  step="1"
+                  required
+                  inputmode="numeric"
+                />
+              </label>
+              <label class="section-form-field section-form-field-measures">
+                <span class="section-form-label">Measures</span>
+                <input
+                  id="section-measures-input"
+                  type="text"
+                  maxlength="200"
+                  placeholder="e.g. mm. 17–32"
+                  autocomplete="off"
+                />
+              </label>
+            </div>
+            <p
+              id="section-form-error"
+              class="section-form-error"
+              role="alert"
+              hidden
+            ></p>
+            <div class="section-form-actions">
+              <button
+                id="section-form-submit"
+                type="submit"
+                class="btn btn-primary"
+              >
+                Save section
+              </button>
+              <button id="section-form-cancel" type="button" class="btn">
+                Cancel
+              </button>
+            </div>
+          </form>
+
+          <ul
+            id="section-list"
+            class="section-list"
+            aria-live="polite"
+          ></ul>
+        </section>
+
+        <section
+          id="practice-panel"
+          class="practice-panel"
+          aria-label="Practice"
+          hidden
+        >
+          <header class="practice-panel-header">
+            <div class="practice-panel-headings">
+              <span class="practice-panel-eyebrow">Practicing</span>
+              <h3 id="practice-section-name" class="practice-section-name"></h3>
+              <span id="practice-section-meta" class="practice-section-meta"></span>
+            </div>
+            <button id="practice-close-btn" class="btn" type="button">
+              Stop
+            </button>
+          </header>
+
+          <div class="practice-counter" aria-live="polite">
+            <span id="practice-count" class="practice-count">0</span>
+            <span class="practice-count-divider">/</span>
+            <span id="practice-goal" class="practice-goal">10</span>
+            <span class="practice-count-label">reps today</span>
+          </div>
+
+          <div
+            id="practice-progress-track"
+            class="practice-progress-track"
+            role="progressbar"
+            aria-valuemin="0"
+            aria-valuemax="10"
+            aria-valuenow="0"
+          >
+            <div id="practice-progress-fill" class="practice-progress-fill"></div>
+          </div>
+
+          <button
+            id="practice-rep-btn"
+            type="button"
+            class="practice-rep-btn"
+          >
+            <span class="practice-rep-btn-icon" aria-hidden="true">✓</span>
+            <span class="practice-rep-btn-label">Successful repetition</span>
+          </button>
+
+          <p id="practice-status" class="practice-status" hidden></p>
+
+          <section
+            id="practice-rating-prompt"
+            class="practice-rating-prompt"
+            aria-label="Rate that practice session"
+            hidden
+          >
+            <header class="practice-rating-prompt-header">
+              <span class="practice-rating-prompt-eyebrow">All 10 done</span>
+              <h4 class="practice-rating-prompt-title">How did that go?</h4>
+              <p class="practice-rating-prompt-hint">
+                Pick a rating to schedule the next review.
+              </p>
+            </header>
+            <div
+              id="practice-rating-buttons"
+              class="practice-rating-buttons"
+              role="group"
+              aria-label="SM-2 quality rating"
+            ></div>
+          </section>
+
+          <p
+            id="practice-next-review"
+            class="practice-next-review"
+            aria-live="polite"
+            hidden
+          ></p>
+
+          <div class="practice-secondary-actions">
+            <button
+              id="practice-undo-btn"
+              type="button"
+              class="btn btn-sm"
+            >
+              Undo last rep
+            </button>
+            <button
+              id="practice-reset-btn"
+              type="button"
+              class="btn btn-sm btn-danger"
+            >
+              Reset today
+            </button>
+          </div>
+          <p class="practice-shortcuts-hint">
+            <kbd>Space</kbd> log rep &middot;
+            <kbd>1</kbd>-<kbd>4</kbd> rate &middot;
+            <kbd>&larr;</kbd><kbd>&rarr;</kbd> page &middot;
+            <kbd>Esc</kbd> stop &middot;
+            <kbd>D</kbd> dark mode
+          </p>
+        </section>
+
+        <div id="pdf-pages" class="pdf-pages" aria-live="polite"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <span id="app-status">Ready</span>
+    <span class="app-version">v0.11.1 &middot; dev</span>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

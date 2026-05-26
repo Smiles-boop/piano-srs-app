@@ -1,0 +1,61 @@
+// PianoSRS — app.js diff for item 9 (Progress stats panel).
+// Snapshot only contains the new wiring added in this run; the rest of
+// app.js is unchanged from the 2026-04-29 (item 8) snapshot.
+
+// --- imports added --------------------------------------------------------
+//   listDistinctPracticeDates  (from db.js)
+//   summariseProgress          (from srs.js)
+
+// --- APP_VERSION bumped 0.8.0 -> 0.9.0 ------------------------------------
+
+// --- new els.* references -------------------------------------------------
+//   statsPanel, statsPanelToday,
+//   statsStreakValue, statsStreakDetail,
+//   statsMasteredValue, statsMasteredDetail,
+//   statsRatedValue, statsRatedDetail,
+//   statsPerPiece, statsPerPieceList
+
+// --- new state ------------------------------------------------------------
+let statsState = null; // { practiceDates: Set<string>, dateISO: string }
+
+// --- new functions --------------------------------------------------------
+async function refreshStats() {
+  const dateISO = localDateISO();
+  try {
+    const dates = await listDistinctPracticeDates();
+    statsState = { practiceDates: new Set(dates), dateISO };
+  } catch (err) {
+    console.warn('Could not hydrate practice-date history for stats', err);
+    statsState = { practiceDates: new Set(), dateISO };
+  }
+  renderStats();
+}
+
+function noteRepLogActivity(dateISO) {
+  if (!statsState) return;
+  if (typeof dateISO === 'string' && dateISO) {
+    statsState.practiceDates.add(dateISO);
+  }
+}
+
+function renderStats() {
+  // Panel hidden if queue isn't hydrated, or library is empty, or summarise throws.
+  // Otherwise: paint the today-line in the header, the three tiles
+  // (streak / mastered / rated), and the per-piece retention bar list.
+  // Per-piece sorted by mastery percentage descending.
+  // See canonical app.js for the full implementation.
+}
+
+// --- call-site hooks ------------------------------------------------------
+// hydrateFromStorage:  added `await refreshStats();` after refreshReviewQueue
+// handleSectionFormSubmit: trailing `renderStats();` after renderReviewQueue
+// handleDeleteSection:     trailing `renderStats();` after renderReviewQueue
+// handleRepClick:
+//   - inside try: noteRepLogActivity(dateISO);
+//   - finally: trailing `renderStats();` after renderReviewQueue
+// handleUndoRep:
+//   - finally: trailing `renderStats();` after renderReviewQueue
+// handleResetReps:
+//   - finally: trailing `renderStats();` after renderReviewQueue
+// handleRatingClick:
+//   - finally: trailing `renderStats();` after renderReviewQueue

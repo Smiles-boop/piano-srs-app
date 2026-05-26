@@ -1,0 +1,370 @@
+// PianoSRS — main app entry point.
+//
+// Roadmap items shipped here:
+//   1. Basic shell layout (sidebar + viewer + status bar).
+//   2. PDF upload via file input + PDF.js rendering (continuous scroll).
+//   3. IndexedDB persistence — pieces survive a refresh.
+//
+// Strategy for item 3:
+//   - On init we open the DB and fetch piece *metadata* (id, title, pageCount,
+//     addedAt). The PDF Blob itself is NOT loaded yet — pieces can be many
+//     megabytes each, so keeping the bytes out of memory until a piece is
+//     actually selected is the cheap, scalable default.
+//   - When the user clicks a piece, we lazy-load its Blob from IDB, hand it
+//     to PDF.js, cache the resulting `pdfDoc` on the in-memory piece, and
+//     render. Subsequent re-selections don't re-hit IDB.
+//   - On upload we persist the new piece to IDB *before* adding it to the
+//     in-memory list. That makes the persistence path a hard precondition for
+//     the UI updating — no risk of a "looks added but isn't really saved"
+//     state.
+//
+// PDF.js is loaded as a global `pdfjsLib` from cdnjs (see index.html).
+
+import {
+  openDb,
+  listPieceMetadata,
+  getPieceBlob,
+  savePiece,
+  pieceToRecord,
+} from './db.js';
+
+const APP_VERSION = '0.3.0'; // roadmap item 3 — IndexedDB persistence
+
+const PDFJS_VERSION = '3.11.174';
+const PDFJS_WORKER_URL =
+  `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.worker.min.js`;
+
+// Render scale for PDF pages. 1.5 looks sharp on most displays without
+// blowing memory up on multi-page scores. Tweak in roadmap item 11 polish.
+const PDF_RENDER_SCALE = 1.5;
+
+const els = {
+  status: document.getElementById('app-status'),
+  addPieceBtn: document.getElementById('add-piece-btn'),
+  fileInput: document.getElementById('pdf-file-input'),
+  pieceList: document.getElementById('piece-list'),
+  viewerPlaceholder: document.getElementById('viewer-placeholder'),
+  viewerPdf: document.getElementById('viewer-pdf'),
+  viewerPdfTitle: document.getElementById('viewer-pdf-title'),
+  viewerPdfMeta: document.getElementById('viewer-pdf-meta'),
+  pdfPages: document.getElementById('pdf-pages'),
+};
+
+/**
+ * In-memory piece library. Each entry:
+ *   {
+ *     id: string,
+ *     title: string,
+ *     pageCount: number,
+ *     addedAt: number,           // ms epoch
+ *     pdfDoc?: PDFDocumentProxy, // populated lazily on first selection
+ *     pdfData?: ArrayBuffer,     // the bytes backing pdfDoc (kept for re-render)
+ *   }
+ *
+ * On app open this is hydrated from IndexedDB metadata only — pdfDoc/pdfData
+ * fill in on first selection. On upload, both fields are populated immediately.
+ */
+const pieces = [];
+let activePieceId = null;
+// Monotonically incrementing token so a slow render of an old PDF can't
+// clobber the viewer when the user has already clicked another piece.
+let renderToken = 0;
+
+/** Set the small status line in the footer. */
+export function setStatus(message) {
+  if (els.status) {
+    els.status.textContent = message;
+  }
+}
+
+/**
+ * Render the piece list in the sidebar.
+ *
+ * @param {Array<{id: string, title: string, pageCount: number}>} list
+ */
+export function renderPieceList(list) {
+  if (!els.pieceList) return;
+  els.pieceList.innerHTML = '';
+  if (!list || list.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'piece-list-empty';
+    empty.innerHTML =
+      'No pieces yet. Click <strong>+ Add piece</strong> to upload a PDF.';
+    els.pieceList.appendChild(empty);
+    return;
+  }
+  for (const piece of list) {
+    const li = document.createElement('li');
+    li.className = 'piece-list-item';
+    if (piece.id === activePieceId) li.classList.add('active');
+    li.dataset.pieceId = piece.id;
+    li.tabIndex = 0;
+    li.setAttribute('role', 'button');
+
+    const title = document.createElement('span');
+    title.className = 'piece-list-item-title';
+    title.textContent = piece.title;
+    li.appendChild(title);
+
+    const meta = document.createElement('span');
+    meta.className = 'piece-list-item-meta';
+    meta.textContent =
+      piece.pageCount === 1 ? '1 page' : `${piece.pageCount} pages`;
+    li.appendChild(meta);
+
+    li.addEventListener('click', () => selectPiece(piece.id));
+    li.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        selectPiece(piece.id);
+      }
+    });
+    els.pieceList.appendChild(li);
+  }
+}
+
+/**
+ * Derive a human-readable piece title from a filename.
+ * Strips the extension and replaces underscores/dashes with spaces.
+ * Exported for unit testing.
+ */
+export function titleFromFilename(filename) {
+  if (!filename) return 'Untitled';
+  const noExt = filename.replace(/\.[^.]+$/, '');
+  const cleaned = noExt.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return cleaned || 'Untitled';
+}
+
+/** Generate a short, sortable id for a new piece. */
+function newPieceId() {
+  return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/** Read a File (or Blob) as an ArrayBuffer. */
+function readBlobAsArrayBuffer(blob) {
+  // Modern browsers expose Blob.prototype.arrayBuffer(); fall back to
+  // FileReader for older environments just in case.
+  if (blob && typeof blob.arrayBuffer === 'function') {
+    return blob.arrayBuffer();
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('Blob read failed'));
+    reader.readAsArrayBuffer(blob);
+  });
+}
+
+/**
+ * Load a PDF (given its raw bytes) via PDF.js. Returns a PDFDocumentProxy.
+ * We pass a fresh Uint8Array each time — PDF.js consumes the buffer.
+ */
+async function loadPdfDocument(arrayBuffer) {
+  if (!window.pdfjsLib) {
+    throw new Error('PDF.js failed to load from CDN');
+  }
+  const bytes = new Uint8Array(arrayBuffer.slice(0));
+  const loadingTask = window.pdfjsLib.getDocument({ data: bytes });
+  return loadingTask.promise;
+}
+
+/** Handle a chosen file: parse, persist to IDB, then add to the in-memory list. */
+async function handlePdfFile(file) {
+  if (!file) return;
+  if (file.type && file.type !== 'application/pdf' &&
+      !/\.pdf$/i.test(file.name)) {
+    setStatus(`"${file.name}" doesn't look like a PDF — ignored.`);
+    return;
+  }
+  setStatus(`Loading "${file.name}"…`);
+  try {
+    const arrayBuffer = await readBlobAsArrayBuffer(file);
+    const pdfDoc = await loadPdfDocument(arrayBuffer);
+    const piece = {
+      id: newPieceId(),
+      title: titleFromFilename(file.name),
+      pageCount: pdfDoc.numPages,
+      addedAt: Date.now(),
+      pdfData: arrayBuffer,
+      pdfDoc,
+    };
+
+    // Persist BEFORE updating the UI so a refresh after upload always sees
+    // exactly what was rendered.
+    const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+    try {
+      await savePiece(pieceToRecord(piece, blob));
+    } catch (err) {
+      console.warn('IndexedDB save failed; piece will live in memory only', err);
+      setStatus(
+        `Added "${piece.title}" but couldn't save it — refresh will lose it.`,
+      );
+    }
+
+    pieces.push(piece);
+    renderPieceList(pieces);
+    setStatus(`Added "${piece.title}" (${piece.pageCount} pages).`);
+    selectPiece(piece.id);
+  } catch (err) {
+    console.error('Failed to load PDF', err);
+    setStatus(`Failed to load PDF: ${err.message || err}`);
+  }
+}
+
+/** Switch the viewer to the given piece, lazy-loading its PDF if needed. */
+async function selectPiece(pieceId) {
+  const piece = pieces.find((p) => p.id === pieceId);
+  if (!piece) return;
+  activePieceId = pieceId;
+  // Re-render the sidebar so the active highlight moves.
+  renderPieceList(pieces);
+
+  try {
+    await ensurePdfLoaded(piece);
+  } catch (err) {
+    console.error('Failed to load PDF from storage', err);
+    setStatus(`Failed to load "${piece.title}": ${err.message || err}`);
+    return;
+  }
+  showPdfViewer(piece);
+}
+
+/**
+ * If the piece doesn't have a `pdfDoc` in memory yet, fetch its Blob from IDB
+ * and instantiate one. Mutates the piece in place.
+ */
+async function ensurePdfLoaded(piece) {
+  if (piece.pdfDoc) return;
+  setStatus(`Loading "${piece.title}"…`);
+  const blob = await getPieceBlob(piece.id);
+  if (!blob) {
+    throw new Error('PDF data is missing from local storage');
+  }
+  const arrayBuffer = await readBlobAsArrayBuffer(blob);
+  piece.pdfData = arrayBuffer;
+  piece.pdfDoc = await loadPdfDocument(arrayBuffer);
+  // pageCount in storage is authoritative, but reconcile in case the stored
+  // metadata ever drifted from the actual document.
+  if (piece.pdfDoc.numPages !== piece.pageCount) {
+    piece.pageCount = piece.pdfDoc.numPages;
+  }
+}
+
+/** Reveal the PDF viewer surface and (re-)render all pages of a piece. */
+async function showPdfViewer(piece) {
+  if (!els.viewerPdf || !els.viewerPlaceholder || !els.pdfPages) return;
+  els.viewerPlaceholder.hidden = true;
+  els.viewerPdf.hidden = false;
+  if (els.viewerPdfTitle) els.viewerPdfTitle.textContent = piece.title;
+  if (els.viewerPdfMeta) {
+    els.viewerPdfMeta.textContent =
+      piece.pageCount === 1 ? '1 page' : `${piece.pageCount} pages`;
+  }
+
+  // Tag this render pass; bail out if a newer one starts.
+  const myToken = ++renderToken;
+  els.pdfPages.innerHTML = '';
+  const loading = document.createElement('div');
+  loading.className = 'pdf-page-loading';
+  loading.textContent = 'Rendering pages…';
+  els.pdfPages.appendChild(loading);
+
+  try {
+    // Build placeholders first so the DOM order is stable, then fill in
+    // canvases as each page renders.
+    const pageHosts = [];
+    els.pdfPages.innerHTML = '';
+    for (let i = 1; i <= piece.pageCount; i++) {
+      const host = document.createElement('div');
+      host.className = 'pdf-page';
+      host.dataset.pageNumber = String(i);
+
+      const label = document.createElement('span');
+      label.className = 'pdf-page-label';
+      label.textContent = `Page ${i}`;
+      host.appendChild(label);
+
+      els.pdfPages.appendChild(host);
+      pageHosts.push(host);
+    }
+
+    for (let i = 1; i <= piece.pageCount; i++) {
+      if (myToken !== renderToken) return; // user clicked another piece
+      const page = await piece.pdfDoc.getPage(i);
+      const viewport = page.getViewport({ scale: PDF_RENDER_SCALE });
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      pageHosts[i - 1].appendChild(canvas);
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      if (myToken !== renderToken) return;
+      setStatus(`Rendered page ${i} of ${piece.pageCount} — "${piece.title}"`);
+    }
+    if (myToken === renderToken) {
+      setStatus(`Showing "${piece.title}" (${piece.pageCount} pages).`);
+    }
+  } catch (err) {
+    console.error('Failed to render PDF', err);
+    if (myToken === renderToken) {
+      setStatus(`Failed to render PDF: ${err.message || err}`);
+    }
+  }
+}
+
+function configurePdfJs() {
+  if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+  }
+}
+
+/**
+ * Hydrate the in-memory piece list from IndexedDB on app open.
+ * Failures here are non-fatal — the app still runs as an in-memory-only
+ * library with a status-line warning.
+ */
+async function hydrateFromStorage() {
+  try {
+    await openDb();
+    const stored = await listPieceMetadata();
+    for (const meta of stored) {
+      pieces.push({ ...meta }); // pdfDoc/pdfData fill in on first select
+    }
+    renderPieceList(pieces);
+    if (stored.length > 0) {
+      setStatus(
+        stored.length === 1
+          ? `Loaded 1 saved piece · v${APP_VERSION}`
+          : `Loaded ${stored.length} saved pieces · v${APP_VERSION}`,
+      );
+    } else {
+      setStatus(`Ready · v${APP_VERSION}`);
+    }
+  } catch (err) {
+    console.warn('Could not hydrate library from IndexedDB', err);
+    setStatus(
+      `Ready (storage unavailable — pieces won’t persist) · v${APP_VERSION}`,
+    );
+  }
+}
+
+function init() {
+  configurePdfJs();
+  setStatus(`Loading library…`);
+
+  if (els.addPieceBtn && els.fileInput) {
+    els.addPieceBtn.addEventListener('click', () => els.fileInput.click());
+    els.fileInput.addEventListener('change', async (e) => {
+      const input = /** @type {HTMLInputElement} */ (e.target);
+      const file = input.files && input.files[0];
+      // Reset so picking the same file again still triggers a change event.
+      input.value = '';
+      await handlePdfFile(file);
+    });
+  }
+
+  renderPieceList(pieces);
+  hydrateFromStorage();
+}
+
+document.addEventListener('DOMContentLoaded', init);
