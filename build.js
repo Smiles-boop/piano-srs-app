@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // PianoSRS build script.
 //
-// Concatenates db.js, srs.js, metronome.js, and app.js into a single
-// bundle.js that runs as a classic (non-module) script. This is needed
-// because Chrome blocks ES module imports over file:// due to CORS.
+// Concatenates db.js, srs.js, midi.js, metronome.js, player.js, and app.js
+// into a single bundle.js that runs as a classic (non-module) script. This is
+// needed because Chrome blocks ES module imports over file:// due to CORS.
+// (index.html loads the individual files directly; this bundle is optional.)
 //
 // Usage:  node build.js
 //
@@ -68,10 +69,19 @@ const srsExports = [
   'isSectionMastered', 'computeDailyStreak', 'summariseProgress',
 ];
 
+// --- midi.js exports ---
+const midiExports = [
+  'parseMidi', 'sectionizeByPhrase', 'groupNotesIntoSteps', 'notesInSection',
+  'buildTempoMap', 'pairNotes',
+];
+
 // --- metronome.js exports ---
 const metronomeExports = [
   'createMetronome', 'MIN_BPM', 'MAX_BPM', 'DEFAULT_BPM',
 ];
+
+// --- player.js exports ---
+const playerExports = ['createPlayer'];
 
 function buildExportBlock(names, ns) {
   return names.map(n => `  window.PianoSRS.${n} = ${n};`).join('\n');
@@ -83,7 +93,7 @@ function buildImportBlock(names) {
 
 // Build output
 let out = `// PianoSRS — auto-generated bundle. Do not edit directly.
-// Built by build.js from db.js + srs.js + metronome.js + app.js.
+// Built by build.js from db.js + srs.js + midi.js + metronome.js + player.js + app.js.
 // This file runs as a classic (non-module) script so the app works
 // when opened via file:// without a local server.
 
@@ -101,13 +111,27 @@ out += `// ===== srs.js =====\n(function() {\n`;
 out += stripModuleSyntax(read('srs.js'));
 out += `\n${buildExportBlock(srsExports)}\n})();\n\n`;
 
+// midi.js
+out += `// ===== midi.js =====\n(function() {\n`;
+out += stripModuleSyntax(read('midi.js'));
+out += `\n${buildExportBlock(midiExports)}\n})();\n\n`;
+
 // metronome.js
 out += `// ===== metronome.js =====\n(function() {\n`;
 out += stripModuleSyntax(read('metronome.js'));
 out += `\n${buildExportBlock(metronomeExports)}\n})();\n\n`;
 
+// player.js — needs midi.js globals
+out += `// ===== player.js =====\n(function() {\n`;
+out += buildImportBlock(midiExports) + '\n\n';
+out += stripModuleSyntax(read('player.js'));
+out += `\n${buildExportBlock(playerExports)}\n})();\n\n`;
+
 // app.js — needs imports from the other modules
-const appImports = [...dbExports, ...srsExports, ...metronomeExports];
+const appImports = [
+  ...dbExports, ...srsExports, ...midiExports, ...metronomeExports,
+  ...playerExports,
+];
 out += `// ===== app.js =====\n(function() {\n`;
 out += buildImportBlock(appImports) + '\n\n';
 out += stripModuleSyntax(read('app.js'));

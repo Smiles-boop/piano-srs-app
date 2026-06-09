@@ -379,6 +379,11 @@ body {
   gap: 24px;
 }
 
+/* The flex display above otherwise overrides the [hidden] attribute. */
+.viewer-placeholder[hidden] {
+  display: none;
+}
+
 .viewer-placeholder-welcome {
   padding: 48px 32px;
   background: var(--surface);
@@ -802,28 +807,27 @@ body {
   color: var(--accent);
 }
 
-/* PDF viewer */
-.viewer-pdf {
+/* MIDI viewer */
+.viewer-midi {
   max-width: 960px;
   margin: 0 auto;
 }
 
-/* When practicing, use flexbox ordering to put the PDF ABOVE the controls. */
-.viewer-pdf.is-practicing {
+/* When practicing, put the practice panel (with the player) ABOVE the list. */
+.viewer-midi.is-practicing {
   display: flex;
   flex-direction: column;
 }
-.viewer-pdf.is-practicing .viewer-pdf-header { order: 0; }
-.viewer-pdf.is-practicing .pdf-pages          { order: 1; margin-bottom: 16px; }
-.viewer-pdf.is-practicing .practice-panel     { order: 2; }
-.viewer-pdf.is-practicing .sections-panel     { order: 3; }
+.viewer-midi.is-practicing .viewer-midi-header { order: 0; }
+.viewer-midi.is-practicing .practice-panel     { order: 1; }
+.viewer-midi.is-practicing .sections-panel     { order: 2; }
 
 /* Hide the sections panel during practice — it's just noise. */
-.viewer-pdf.is-practicing .sections-panel {
+.viewer-midi.is-practicing .sections-panel {
   display: none;
 }
 
-.viewer-pdf-header {
+.viewer-midi-header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -833,59 +837,17 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-.viewer-pdf-title {
+.viewer-midi-title {
   margin: 0;
   font-size: 18px;
   font-weight: 600;
   word-break: break-word;
 }
 
-.viewer-pdf-meta {
+.viewer-midi-meta {
   font-size: 13px;
   color: var(--text-muted);
   flex-shrink: 0;
-}
-
-.pdf-pages {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 24px;
-}
-
-.pdf-page {
-  background: var(--surface);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-page);
-  overflow: hidden;
-  position: relative;
-  max-width: 100%;
-}
-
-.pdf-page canvas {
-  display: block;
-  max-width: 100%;
-  height: auto;
-}
-
-.pdf-page-label {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  background: var(--page-label-bg);
-  color: var(--page-label-text);
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  letter-spacing: 0.04em;
-  pointer-events: none;
-}
-
-.pdf-page-loading {
-  padding: 48px 24px;
-  color: var(--text-muted);
-  font-size: 13px;
-  text-align: center;
 }
 
 /* Sections panel (roadmap item 4) */
@@ -1015,83 +977,6 @@ body {
   gap: 8px;
   justify-content: flex-end;
   margin-top: 12px;
-}
-
-/* Crop region controls (inside section form) */
-.section-form-field-crop {
-  margin-top: 8px;
-}
-.section-crop-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.section-crop-status {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-.section-crop-status.has-crop {
-  color: var(--accent);
-  font-weight: 500;
-}
-
-/* Crop overlay — drawn over a .pdf-page when the user is selecting a region */
-.pdf-page-crop-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  cursor: crosshair;
-  z-index: 10;
-}
-.pdf-page-crop-selection {
-  position: absolute;
-  left: 0;
-  width: 100%;
-  background: rgba(59, 130, 246, 0.15);
-  border-top: 2px solid var(--accent);
-  border-bottom: 2px solid var(--accent);
-  pointer-events: none;
-  z-index: 11;
-}
-
-/* Dimmed areas above/below the crop selection */
-.pdf-page-crop-dim {
-  position: absolute;
-  left: 0;
-  width: 100%;
-  background: rgba(0, 0, 0, 0.35);
-  pointer-events: none;
-  z-index: 11;
-}
-
-/* Existing crop highlight shown on section list hover */
-.pdf-page-crop-highlight {
-  position: absolute;
-  left: 0;
-  width: 100%;
-  background: rgba(59, 130, 246, 0.10);
-  border-top: 2px dashed var(--accent);
-  border-bottom: 2px dashed var(--accent);
-  pointer-events: none;
-  z-index: 9;
-  transition: opacity 0.15s;
-}
-
-/* Practice mode: clip PDF page to crop region */
-.pdf-page.crop-active {
-  overflow: hidden;
-  /* Let the cropped slice fill the container width naturally. */
-  max-width: 100%;
-}
-.pdf-page.crop-active canvas {
-  display: block;
-  /* Remove the max-width constraint so the canvas renders at full
-     rendered resolution, giving the cropped slice more visual space. */
-  max-width: none;
-  width: 100%;
 }
 
 .section-list {
@@ -1461,57 +1346,6 @@ body {
 
 .practice-progress-fill.is-complete {
   background: var(--complete-fill);
-}
-
-.practice-rep-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  flex: 1;
-  padding: 12px 16px;
-  font: inherit;
-  font-size: 15px;
-  font-weight: 600;
-  border-radius: var(--radius);
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: var(--accent-contrast);
-  cursor: pointer;
-  transition: background-color 0.15s ease, transform 0.05s ease,
-    border-color 0.15s ease;
-}
-
-.practice-rep-btn:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-}
-
-.practice-rep-btn:active:not(:disabled) {
-  transform: scale(0.99);
-}
-
-.practice-rep-btn:focus-visible {
-  outline: 3px solid var(--focus-ring);
-  outline-offset: 3px;
-}
-
-.practice-rep-btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.practice-rep-btn.is-complete {
-  background: var(--complete-fill);
-  border-color: var(--complete-fill);
-  color: var(--complete-text);
-  opacity: 1;
-}
-
-.practice-rep-btn-icon {
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1;
 }
 
 .practice-status {
@@ -2057,8 +1891,8 @@ kbd {
     font-size: 18px;
   }
 
-  /* PDF header stacks on narrow screens */
-  .viewer-pdf-header {
+  /* MIDI header stacks on narrow screens */
+  .viewer-midi-header {
     flex-direction: column;
     gap: 4px;
   }
@@ -2086,11 +1920,6 @@ kbd {
   .practice-panel-header {
     flex-direction: column;
     align-items: stretch;
-  }
-
-  .practice-rep-btn {
-    padding: 18px 14px;
-    font-size: 16px;
   }
 
   /* Rating buttons: 2×2 grid on mobile */
@@ -2153,4 +1982,155 @@ kbd {
   .sidebar-footer .btn {
     width: 100%;
   }
+}
+
+/* ============================================================== */
+/* Synthesia player (player.js)                                   */
+/* ============================================================== */
+
+.player {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 4px 0 14px 0;
+}
+
+.player-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.player-midi-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+.player-midi-status.is-ok { color: var(--accent); font-weight: 600; }
+.player-midi-status.is-warn { color: var(--danger-text); }
+
+/* Hand toggle (Both / Right / Left) */
+.player-hand-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.player-hand-btn {
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  cursor: pointer;
+  border-left: 1px solid var(--border);
+}
+.player-hand-btn:first-child { border-left: none; }
+.player-hand-btn.is-active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.player-hand-btn.is-disabled,
+.player-hand-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.player-keys-toggle.is-active,
+.player-listen-btn.is-active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.player-feedback {
+  margin: 0;
+  font-size: 13px;
+  min-height: 1.3em;
+  color: var(--text-muted);
+}
+.player-feedback.is-success { color: var(--accent); font-weight: 600; }
+.player-feedback.is-error { color: var(--danger-text); font-weight: 600; }
+
+/* Falling-note canvas */
+.player-canvas {
+  display: block;
+  width: 100%;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom: none;
+  touch-action: none;
+}
+
+/* On-screen keyboard */
+.player-keyboard {
+  position: relative;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  border-radius: 0 0 var(--radius) var(--radius);
+  overflow: hidden;
+  user-select: none;
+  touch-action: none;
+}
+.player-keys-white {
+  display: flex;
+  height: 100%;
+}
+.player-keys-black {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 62%;
+  pointer-events: none;
+}
+.player-key {
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.player-key-white {
+  flex: 1 1 0;
+  background: #fcfcfa;
+  border: none;
+  border-left: 1px solid #cfcdc6;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 4px;
+}
+.player-key-white:first-child { border-left: none; }
+.player-key-black {
+  position: absolute;
+  top: 0;
+  width: calc(var(--black-half) * 2);
+  height: 100%;
+  background: #2a2a2e;
+  border: none;
+  border-radius: 0 0 3px 3px;
+  pointer-events: auto;
+  z-index: 2;
+}
+.player-key-label {
+  font-size: 9px;
+  color: #9a978e;
+  pointer-events: none;
+}
+/* Key states */
+.player-key-white.is-expected { background: #fde68a; }
+.player-key-black.is-expected { background: #b08900; }
+.player-key-white.is-held { background: #bfdbfe; }
+.player-key-black.is-held { background: #1d4ed8; }
+.player-key-white.is-correct { background: #6ee7b7; }
+.player-key-black.is-correct { background: #059669; }
+.player-key-white.is-wrong { background: #fca5a5; }
+.player-key-black.is-wrong { background: #dc2626; }
+
+@media (max-width: 640px) {
+  .player-controls { gap: 6px; }
+  .player-midi-status { flex-basis: 100%; }
 }

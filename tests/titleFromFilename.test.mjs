@@ -36,18 +36,32 @@ const fakeDoc = {
 };
 
 globalThis.document = fakeDoc;
-globalThis.window = { pdfjsLib: undefined };
+globalThis.window = {};
 
 const mod = await import('../app.js');
 
 // --- titleFromFilename ---
-assert.equal(mod.titleFromFilename('beethoven_op27_no2.pdf'), 'beethoven op27 no2');
-assert.equal(mod.titleFromFilename('Chopin-Nocturne-Op9-No2.pdf'), 'Chopin Nocturne Op9 No2');
-assert.equal(mod.titleFromFilename('  spaced   name .PDF'), 'spaced name');
+assert.equal(mod.titleFromFilename('beethoven_op27_no2.mid'), 'beethoven op27 no2');
+assert.equal(mod.titleFromFilename('Chopin-Nocturne-Op9-No2.midi'), 'Chopin Nocturne Op9 No2');
+assert.equal(mod.titleFromFilename('  spaced   name .MID'), 'spaced name');
 assert.equal(mod.titleFromFilename('NoExtension'), 'NoExtension');
-assert.equal(mod.titleFromFilename('multiple.dots.in.name.pdf'), 'multiple.dots.in.name');
+assert.equal(mod.titleFromFilename('multiple.dots.in.name.mid'), 'multiple.dots.in.name');
 assert.equal(mod.titleFromFilename(''), 'Untitled');
 assert.equal(mod.titleFromFilename(null), 'Untitled');
-assert.equal(mod.titleFromFilename('___.pdf'), 'Untitled');
+assert.equal(mod.titleFromFilename('___.mid'), 'Untitled');
+
+// --- formatClock / meta helpers ---
+assert.equal(mod.formatClock(0), '0:00');
+assert.equal(mod.formatClock(5), '0:05');
+assert.equal(mod.formatClock(65), '1:05');
+assert.equal(mod.formatClock(125.7), '2:06');
+assert.equal(
+  mod.formatPieceMeta({ noteCount: 48, durationSec: 26.5 }),
+  '48 notes · 0:27',
+);
+assert.equal(
+  mod.formatSectionMeta({ noteCount: 1, startSec: 4.5, endSec: 8.5 }),
+  '1 note · 0:05–0:09',
+);
 
 console.log('titleFromFilename: all assertions passed');

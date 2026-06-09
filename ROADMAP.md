@@ -26,3 +26,13 @@ Ordered incremental roadmap. Check items off as they ship.
 - [x] 18. Practice session timer: elapsed time display (m:ss / h:mm:ss) in the practice panel header with pause/resume button and `T` keyboard shortcut.
 - [x] 19. Persist cumulative practice time per section: on session close, elapsed time is saved to IDB; total time shown as a badge on each section row.
 - [x] 20. Cumulative time display: show total practice time in the practice panel header (next to the live timer) and per-piece total time in the stats panel retention list.
+
+## v0.20 — MIDI pivot
+
+The practice surface moved from PDF sheet music + self-reported reps to **MIDI + Synthesia-style note detection**. The SM-2 scheduler, daily queue, streak/stats, metronome, timer, and import/export are all reused unchanged — only the *source* of a piece (MIDI instead of PDF) and the *source* of a rep (a detected clean run instead of a button click) changed.
+
+- [x] 21. MIDI parser (`midi.js`): self-contained SMF parser (ArrayBuffer → notes + tempo map) and phrase-based auto-sectioning. Pure + unit-tested (`tests/midi.test.mjs`).
+- [x] 22. Data model: pieces store a MIDI blob; sections carry tick/second ranges (auto-assigned). DB upgraded to v4.
+- [x] 23. Synthesia player (`player.js`): falling-note canvas + on-screen keyboard, Web MIDI / on-screen / computer-keyboard input, and a Web-Audio synth "Listen" preview.
+- [x] 24. Wait-mode, strict clean-run engine: play the correct next note(s) to advance; one wrong note restarts the attempt; 10 clean runs completes the review and feeds the existing SM-2 rating flow.
+- [x] 25. Hand toggle (Both / Right / Left), "Re-split" sections, and updated docs.

@@ -44,7 +44,11 @@
 // tiny enough that the simpler shape wins.
 
 const DB_NAME = 'pianosrs';
-const DB_VERSION = 3;
+// v4: the app moved from PDF sheet music to MIDI. Piece records now hold a
+// `midiBlob` (not `pdfBlob`) and section records carry tick/second ranges
+// instead of page + measure text. The shapes are incompatible, so the v4
+// upgrade clears the old stores (see onupgradeneeded).
+const DB_VERSION = 4;
 const STORE_PIECES = 'pieces';
 const STORE_SECTIONS = 'sections';
 const STORE_REP_LOGS = 'repLogs';
@@ -85,6 +89,16 @@ function openDb() {
         repLogs.createIndex(INDEX_REP_LOGS_BY_SECTION, 'sectionId', { unique: false });
         repLogs.createIndex(INDEX_REP_LOGS_BY_DATE, 'dateISO', { unique: false });
       }
+      // v4 → MIDI migration. The old PDF pieces and page/measure sections are
+      // structurally incompatible with the new MIDI flow, so wipe them when
+      // upgrading from any earlier version. A fresh install (oldVersion 0)
+      // starts empty and skips this.
+      if (e.oldVersion > 0 && e.oldVersion < 4) {
+        const tx = e.target.transaction;
+        tx.objectStore(STORE_PIECES).clear();
+        tx.objectStore(STORE_SECTIONS).clear();
+        tx.objectStore(STORE_REP_LOGS).clear();
+      }
     };
     req.onsuccess = (e) => resolve(e.target.result);
     req.onerror = (e) =>
@@ -123,7 +137,7 @@ function repLogsStore(db, mode) {
 
 /**
  * Return metadata for every saved piece, sorted by addedAt ascending.
- * The pdfBlob is NOT included — keep it out of memory until a piece is
+ * The midiBlob is NOT included — keep it out of memory until a piece is
  * actually selected (lazy-load).
  */
 async function listPieceMetadata() {
@@ -134,11 +148,11 @@ async function listPieceMetadata() {
     .sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
 }
 
-/** Fetch the stored Blob for a piece, or null if it isn't in the DB. */
+/** Fetch the stored MIDI Blob for a piece, or null if it isn't in the DB. */
 async function getPieceBlob(id) {
   const db = await openDb();
   const rec = await awaitRequest(piecesStore(db, 'readonly').get(id));
-  return rec ? rec.pdfBlob : null;
+  return rec ? rec.midiBlob : null;
 }
 
 /** Persist a single piece record. Overwrites by id. */
@@ -541,31 +555,38 @@ async function addPracticeTime(sectionId, elapsedMs) {
 // --- Pure helpers (importable + testable in Node) ------------------------
 
 /**
- * Extract metadata fields from a stored piece record. Drops `pdfBlob`.
- * @param {{id:string,title:string,pageCount:number,addedAt:number,pdfBlob:Blob}|null} record
+ * Extract metadata fields from a stored piece record. Drops `midiBlob`.
+ * @param {{id:string,title:string,durationSec:number,ticksPerQuarter:number,
+ *          noteCount:number,addedAt:number,midiBlob:Blob}|null} record
  */
 function metadataFromRecord(record) {
   if (!record) return null;
   return {
     id: record.id,
     title: record.title,
-    pageCount: record.pageCount,
+    durationSec: record.durationSec,
+    ticksPerQuarter: record.ticksPerQuarter,
+    noteCount: record.noteCount,
     addedAt: record.addedAt,
   };
 }
 
 /**
- * Build a piece storage record from an in-memory piece plus its PDF Blob.
+ * Build a piece storage record from an in-memory piece plus its MIDI Blob.
  * `addedAt` is auto-filled if missing so that re-saves from older records
  * (which never had the field) still get a stable timestamp.
  */
-function pieceToRecord(piece, pdfBlob) {
+function pieceToRecord(piece, midiBlob) {
   return {
     id: piece.id,
     title: piece.title,
-    pageCount: piece.pageCount,
+    durationSec:
+      typeof piece.durationSec === 'number' ? piece.durationSec : 0,
+    ticksPerQuarter:
+      typeof piece.ticksPerQuarter === 'number' ? piece.ticksPerQuarter : 480,
+    noteCount: typeof piece.noteCount === 'number' ? piece.noteCount : 0,
     addedAt: typeof piece.addedAt === 'number' ? piece.addedAt : Date.now(),
-    pdfBlob,
+    midiBlob,
   };
 }
 
@@ -588,26 +609,18 @@ function sectionToRecord(section) {
     id: section.id,
     pieceId: section.pieceId,
     name: section.name,
-    pageNumber: section.pageNumber,
-    measures: typeof section.measures === 'string' ? section.measures : '',
+    // MIDI tick/second window this section covers. Auto-assigned by the
+    // phrase-sectioning pass on import; a note belongs to the section if it
+    // starts within [startTick, endTick).
+    startTick: typeof section.startTick === 'number' ? section.startTick : 0,
+    endTick: typeof section.endTick === 'number' ? section.endTick : 0,
+    startSec: typeof section.startSec === 'number' ? section.startSec : 0,
+    endSec: typeof section.endSec === 'number' ? section.endSec : 0,
+    noteCount: typeof section.noteCount === 'number' ? section.noteCount : 0,
     notes: typeof section.notes === 'string' ? section.notes : '',
     addedAt,
     order: typeof section.order === 'number' ? section.order : addedAt,
   };
-  // Optional crop-region fields — normalised 0–1 fractions of the page
-  // height. When both are present the practice view clips the PDF canvas
-  // to show only the vertical band [cropY1, cropY2].
-  if (
-    typeof section.cropY1 === 'number' &&
-    typeof section.cropY2 === 'number' &&
-    Number.isFinite(section.cropY1) &&
-    Number.isFinite(section.cropY2) &&
-    section.cropY1 >= 0 && section.cropY2 <= 1 &&
-    section.cropY1 < section.cropY2
-  ) {
-    record.cropY1 = section.cropY1;
-    record.cropY2 = section.cropY2;
-  }
 
   // Optional SRS fields — only carried through when present + well-formed,
   // so legacy section records remain unchanged on edit.
@@ -647,15 +660,18 @@ function sectionToRecord(section) {
 }
 
 /**
- * Validate raw section input from the UI. Returns either
- *   { ok: true, value: { name, pageNumber, measures } }
+ * Validate raw section input from the UI. With MIDI, a section's tick range is
+ * assigned automatically by the phrase-sectioning pass on import — the manual
+ * form only edits the section's `name` and free-text `notes` (fingerings).
+ *
+ * Returns either
+ *   { ok: true, value: { name, notes } }
  * or
- *   { ok: false, errors: { name?, pageNumber?, measures? } }.
+ *   { ok: false, errors: { name?, notes? } }.
  *
  * Pure — no DOM access, no IDB access — so it's directly unit-testable.
  *
- * @param {{name?: string, pageNumber?: number|string, measures?: string}} raw
- * @param {{maxPage?: number}} [ctx] optional bounds (e.g. piece.pageCount)
+ * @param {{name?: string, notes?: string}} raw
  */
 function validateSectionInput(raw, ctx = {}) {
   const errors = {};
@@ -667,35 +683,15 @@ function validateSectionInput(raw, ctx = {}) {
     errors.name = 'Name must be 100 characters or fewer.';
   }
 
-  const rawPage = raw.pageNumber;
-  const pageNumber =
-    typeof rawPage === 'number' ? rawPage : Number(String(rawPage ?? '').trim());
-  if (
-    !Number.isFinite(pageNumber) ||
-    !Number.isInteger(pageNumber) ||
-    pageNumber < 1
-  ) {
-    errors.pageNumber = 'Page must be a positive whole number.';
-  } else if (
-    typeof ctx.maxPage === 'number' &&
-    Number.isFinite(ctx.maxPage) &&
-    pageNumber > ctx.maxPage
-  ) {
-    errors.pageNumber =
-      ctx.maxPage === 1
-        ? 'Page must be 1 (this piece has only 1 page).'
-        : `Page must be between 1 and ${ctx.maxPage}.`;
-  }
-
-  const measures = typeof raw.measures === 'string' ? raw.measures.trim() : '';
-  if (measures.length > 200) {
-    errors.measures = 'Measures must be 200 characters or fewer.';
+  const notes = typeof raw.notes === 'string' ? raw.notes.trim() : '';
+  if (notes.length > 2000) {
+    errors.notes = 'Notes must be 2000 characters or fewer.';
   }
 
   if (Object.keys(errors).length > 0) {
     return { ok: false, errors };
   }
-  return { ok: true, value: { name, pageNumber, measures } };
+  return { ok: true, value: { name, notes } };
 }
 
 // --- Rep-log pure helpers -------------------------------------------------
@@ -796,24 +792,27 @@ async function exportLibrary() {
     awaitRequest(tx.objectStore(STORE_REP_LOGS).getAll()),
   ]);
 
-  // Convert piece Blobs to base64 strings.
+  // Convert piece MIDI Blobs to base64 strings.
   const piecesOut = [];
   for (const rec of pieceRecords) {
     const entry = {
       id: rec.id,
       title: rec.title,
-      pageCount: rec.pageCount,
+      durationSec: rec.durationSec,
+      ticksPerQuarter: rec.ticksPerQuarter,
+      noteCount: rec.noteCount,
       addedAt: rec.addedAt,
     };
-    if (rec.pdfBlob) {
-      const buf = await blobToArrayBuffer(rec.pdfBlob);
-      entry.pdfBase64 = arrayBufferToBase64(buf);
+    if (rec.midiBlob) {
+      const buf = await blobToArrayBuffer(rec.midiBlob);
+      entry.midiBase64 = arrayBufferToBase64(buf);
     }
     piecesOut.push(entry);
   }
 
   return {
-    version: 1,
+    // v2 = MIDI-era format. v1 (PDF) backups are not importable here.
+    version: 2,
     exportedAt: new Date().toISOString(),
     pieces: piecesOut,
     sections: sectionRecords,
@@ -839,9 +838,14 @@ async function importLibrary(data, opts = {}) {
   if (!data || typeof data !== 'object') {
     throw new Error('Invalid backup data — expected an object.');
   }
-  if (data.version !== 1) {
+  if (data.version === 1) {
     throw new Error(
-      `Unsupported backup version "${data.version}" — this app reads version 1.`,
+      'This backup is from the old PDF version of PianoSRS and cannot be imported into the MIDI version.',
+    );
+  }
+  if (data.version !== 2) {
+    throw new Error(
+      `Unsupported backup version "${data.version}" — this app reads version 2.`,
     );
   }
 
@@ -887,19 +891,22 @@ async function importLibrary(data, opts = {}) {
     }
     pieceIdMap.set(p.id, newId);
 
-    // Reconstruct the Blob from base64.
-    let pdfBlob = null;
-    if (typeof p.pdfBase64 === 'string' && p.pdfBase64.length > 0) {
-      const buf = base64ToArrayBuffer(p.pdfBase64);
-      pdfBlob = new Blob([buf], { type: 'application/pdf' });
+    // Reconstruct the MIDI Blob from base64.
+    let midiBlob = null;
+    if (typeof p.midiBase64 === 'string' && p.midiBase64.length > 0) {
+      const buf = base64ToArrayBuffer(p.midiBase64);
+      midiBlob = new Blob([buf], { type: 'audio/midi' });
     }
 
     const record = {
       id: newId,
       title,
-      pageCount: p.pageCount || 0,
+      durationSec: typeof p.durationSec === 'number' ? p.durationSec : 0,
+      ticksPerQuarter:
+        typeof p.ticksPerQuarter === 'number' ? p.ticksPerQuarter : 480,
+      noteCount: typeof p.noteCount === 'number' ? p.noteCount : 0,
       addedAt: typeof p.addedAt === 'number' ? p.addedAt : Date.now(),
-      pdfBlob,
+      midiBlob,
     };
     await awaitRequest(
       db.transaction(STORE_PIECES, 'readwrite').objectStore(STORE_PIECES).put(record),
@@ -1004,4 +1011,51 @@ function base64ToArrayBuffer(base64) {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes.buffer;
+}
+
+// ---- Node export shim (browser-safe) ------------------------------------
+// In the browser these are plain globals (classic <script>). Under Node the
+// object-literal assignment is picked up by the CJS→ESM interop so the test
+// files can `import` them. `module` is undefined in the browser, so this is
+// skipped there with no error.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    REP_GOAL,
+    openDb,
+    listPieceMetadata,
+    getPieceBlob,
+    savePiece,
+    deletePiece,
+    renamePiece,
+    pieceToRecord,
+    metadataFromRecord,
+    listSectionsForPiece,
+    listAllSections,
+    saveSection,
+    deleteSection,
+    reorderSections,
+    deleteSectionsForPiece,
+    deleteRepLogsForSections,
+    sectionToRecord,
+    validateSectionInput,
+    localDateISO,
+    repLogId,
+    newRepLogRecord,
+    bumpRepLog,
+    getRepLog,
+    saveRepLog,
+    incrementRepLog,
+    setRepLogCount,
+    getRepCountsForSections,
+    getRepCountsForDate,
+    isRepGoalMet,
+    listDistinctPracticeDates,
+    listRepLogsForSection,
+    listAllRepLogs,
+    addPracticeTime,
+    exportLibrary,
+    importLibrary,
+    arrayBufferToBase64,
+    base64ToArrayBuffer,
+  };
 }

@@ -204,3 +204,10 @@ function createMetronome() {
 }
 
 // Exported via classic script global scope (no ES module export needed).
+
+// ---- Node export shim (browser-safe) ------------------------------------
+// Lets the Node test suite `import` these; skipped in the browser where
+// `module` is undefined (classic <script>).
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { createMetronome, MIN_BPM, MAX_BPM, DEFAULT_BPM };
+}

@@ -73,40 +73,29 @@
 // Dependencies loaded via classic <script> tags in index.html (db.js,
 // srs.js, metronome.js) — all symbols are available as globals.
 
-const APP_VERSION = '0.19.0'; // cumulative time in practice header + per-piece stats
-
-const PDFJS_VERSION = '3.11.174';
-const PDFJS_WORKER_URL =
-  `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.worker.min.js`;
-
-// Render scale for PDF pages. 1.5 looks sharp on most displays without
-// blowing memory up on multi-page scores. Tweak in roadmap item 11 polish.
-const PDF_RENDER_SCALE = 1.5;
+const APP_VERSION = '0.20.0'; // MIDI + Synthesia practice with note detection
 
 const els = {
   status: document.getElementById('app-status'),
   addPieceBtn: document.getElementById('add-piece-btn'),
-  fileInput: document.getElementById('pdf-file-input'),
+  fileInput: document.getElementById('midi-file-input'),
   pieceList: document.getElementById('piece-list'),
   viewerPlaceholder: document.getElementById('viewer-placeholder'),
-  viewerPdf: document.getElementById('viewer-pdf'),
-  viewerPdfTitle: document.getElementById('viewer-pdf-title'),
-  viewerPdfMeta: document.getElementById('viewer-pdf-meta'),
-  pdfPages: document.getElementById('pdf-pages'),
-  // Sections panel (item 4)
+  viewerMidi: document.getElementById('viewer-midi'),
+  viewerMidiTitle: document.getElementById('viewer-midi-title'),
+  viewerMidiMeta: document.getElementById('viewer-midi-meta'),
+  // Sections panel
   sectionsPanel: document.getElementById('sections-panel'),
-  addSectionBtn: document.getElementById('add-section-btn'),
+  resplitBtn: document.getElementById('resplit-sections-btn'),
   sectionForm: document.getElementById('section-form'),
   sectionFormTitle: document.getElementById('section-form-title'),
   sectionNameInput: document.getElementById('section-name-input'),
-  sectionPageInput: document.getElementById('section-page-input'),
-  sectionMeasuresInput: document.getElementById('section-measures-input'),
   sectionNotesInput: document.getElementById('section-notes-input'),
   sectionFormError: document.getElementById('section-form-error'),
   sectionFormCancel: document.getElementById('section-form-cancel'),
   sectionFormSubmit: document.getElementById('section-form-submit'),
   sectionList: document.getElementById('section-list'),
-  // Practice panel (item 5)
+  // Practice panel
   practicePanel: document.getElementById('practice-panel'),
   practiceSectionName: document.getElementById('practice-section-name'),
   practiceSectionMeta: document.getElementById('practice-section-meta'),
@@ -115,12 +104,11 @@ const els = {
   practiceGoal: document.getElementById('practice-goal'),
   practiceProgressTrack: document.getElementById('practice-progress-track'),
   practiceProgressFill: document.getElementById('practice-progress-fill'),
-  practiceRepBtn: document.getElementById('practice-rep-btn'),
+  playerHost: document.getElementById('player-host'),
   practiceStatus: document.getElementById('practice-status'),
   practiceNextReview: document.getElementById('practice-next-review'),
   practiceRatingPrompt: document.getElementById('practice-rating-prompt'),
   practiceRatingButtons: document.getElementById('practice-rating-buttons'),
-  practiceUndoBtn: document.getElementById('practice-undo-btn'),
   practiceResetBtn: document.getElementById('practice-reset-btn'),
   practiceCloseBtn: document.getElementById('practice-close-btn'),
   practiceTimer: document.getElementById('practice-timer'),
@@ -167,10 +155,6 @@ const els = {
   metronomeBeatIndicator: document.getElementById('metronome-beat-indicator'),
   metronomeCollapseBtn: document.getElementById('metronome-collapse-btn'),
   metronomeBody: document.getElementById('metronome-body'),
-  // Crop region (section-scoped view)
-  sectionCropBtn: document.getElementById('section-crop-btn'),
-  sectionCropClearBtn: document.getElementById('section-crop-clear-btn'),
-  sectionCropStatus: document.getElementById('section-crop-status'),
 };
 
 /**
@@ -178,33 +162,29 @@ const els = {
  *   {
  *     id: string,
  *     title: string,
- *     pageCount: number,
+ *     durationSec: number,
+ *     ticksPerQuarter: number,
+ *     noteCount: number,
  *     addedAt: number,
- *     pdfDoc?: PDFDocumentProxy,    // populated lazily on first selection
- *     pdfData?: ArrayBuffer,        // bytes backing pdfDoc (kept for re-render)
+ *     notes?: Array<NoteEvent>,    // parsed MIDI notes; lazy on first selection
  *     sections?: Array<SectionRecord>, // populated lazily on first selection
  *   }
  */
 const pieces = [];
 let activePieceId = null;
-// Monotonically incrementing token so a slow render of an old PDF can't
-// clobber the viewer when the user has already clicked another piece.
-let renderToken = 0;
 
 /**
- * Section form state. `null` = closed; `{ mode: 'add' }` = creating;
- * `{ mode: 'edit', id: 's_xxx' }` = editing existing section.
+ * The Synthesia player/engine (player.js), lazily created on first practice
+ * and mounted into #player-host. Reused across sections.
+ * @type {ReturnType<typeof createPlayer> | null}
+ */
+let player = null;
+
+/**
+ * Section form state. `null` = closed; the form is edit-only now
+ * (sections are auto-split), so this is `{ mode: 'edit', id: 's_xxx' }`.
  */
 let sectionFormState = null;
-
-/**
- * Crop selection state. When the user clicks "Select on page" in the section
- * form, we enter crop-selection mode. The user drags vertically on the target
- * PDF page to define the crop region. The result (normalised 0–1 fractions)
- * is stored here until the section form is submitted.
- */
-let pendingCrop = null;   // { y1: number, y2: number } or null
-let cropOverlayCleanup = null; // function to tear down the overlay
 
 /**
  * Practice state. `null` = no active practice; otherwise:
@@ -301,7 +281,7 @@ function renderPieceList(list) {
     const empty = document.createElement('li');
     empty.className = 'piece-list-empty';
     empty.innerHTML =
-      'No pieces yet. Click <strong>+ Add piece</strong> to upload a PDF.';
+      'No pieces yet. Click <strong>+ Add piece</strong> to load a MIDI file.';
     els.pieceList.appendChild(empty);
     return;
   }
@@ -323,8 +303,7 @@ function renderPieceList(list) {
 
     const meta = document.createElement('span');
     meta.className = 'piece-list-item-meta';
-    meta.textContent =
-      piece.pageCount === 1 ? '1 page' : `${piece.pageCount} pages`;
+    meta.textContent = formatPieceMeta(piece);
     infoWrap.appendChild(meta);
 
     li.appendChild(infoWrap);
@@ -397,7 +376,7 @@ async function handleDeletePiece(pieceId, title) {
       activePieceId = null;
       closePracticeView({ silent: true });
       closeSectionForm();
-      if (els.viewerPdf) els.viewerPdf.hidden = true;
+      if (els.viewerMidi) els.viewerMidi.hidden = true;
       if (els.viewerPlaceholder) els.viewerPlaceholder.hidden = false;
     }
 
@@ -451,8 +430,8 @@ function startInlineRename(li, piece) {
       piece.title = newTitle;
       renderPieceList(pieces);
       // Also update the viewer header if this piece is active.
-      if (activePieceId === piece.id && els.viewerPdfTitle) {
-        els.viewerPdfTitle.textContent = newTitle;
+      if (activePieceId === piece.id && els.viewerMidiTitle) {
+        els.viewerMidiTitle.textContent = newTitle;
       }
       setStatus(`Renamed to "${newTitle}".`);
     } catch (err) {
@@ -487,6 +466,27 @@ function titleFromFilename(filename) {
   return cleaned || 'Untitled';
 }
 
+/** Format seconds as m:ss for the piece/section meta lines. */
+function formatClock(totalSec) {
+  const s = Math.max(0, Math.round(totalSec || 0));
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** Sidebar meta line for a piece: note count + duration. */
+function formatPieceMeta(piece) {
+  const n = piece.noteCount || 0;
+  const noteStr = n === 1 ? '1 note' : `${n} notes`;
+  return `${noteStr} · ${formatClock(piece.durationSec)}`;
+}
+
+/** Section meta line: note count + its time window within the piece. */
+function formatSectionMeta(section) {
+  const n = section.noteCount || 0;
+  const noteStr = n === 1 ? '1 note' : `${n} notes`;
+  return `${noteStr} · ${formatClock(section.startSec)}–${formatClock(section.endSec)}`;
+}
+
 /** Generate a short, sortable id for a new piece. */
 function newPieceId() {
   return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -510,46 +510,74 @@ function readBlobAsArrayBuffer(blob) {
   });
 }
 
-/**
- * Load a PDF (given its raw bytes) via PDF.js. Returns a PDFDocumentProxy.
- * We pass a fresh Uint8Array each time — PDF.js consumes the buffer.
- */
-async function loadPdfDocument(arrayBuffer) {
-  if (!window.pdfjsLib) {
-    throw new Error('PDF.js failed to load from CDN');
-  }
-  const bytes = new Uint8Array(arrayBuffer.slice(0));
-  const loadingTask = window.pdfjsLib.getDocument({ data: bytes });
-  return loadingTask.promise;
-}
-
 // --- Upload --------------------------------------------------------------
 
-/** Handle a chosen file: parse, persist to IDB, then add to the in-memory list. */
-async function handlePdfFile(file) {
+/**
+ * Build auto-split section records for a parsed piece and persist them.
+ * Returns the in-memory section records. Shared by import and "Re-split".
+ */
+async function buildSectionsForPiece(piece) {
+  const ranges = sectionizeByPhrase(piece.notes, piece.ticksPerQuarter);
+  const now = Date.now();
+  const records = [];
+  ranges.forEach((range, i) => {
+    const record = sectionToRecord({
+      id: newSectionId(),
+      pieceId: piece.id,
+      name: range.name,
+      startTick: range.startTick,
+      endTick: range.endTick,
+      startSec: range.startSec,
+      endSec: range.endSec,
+      noteCount: range.noteCount,
+      notes: '',
+      addedAt: now + i, // slight offset keeps order deterministic
+      order: i,
+    });
+    records.push(record);
+  });
+  for (const record of records) {
+    try { await saveSection(record); } catch (_) { /* best-effort */ }
+  }
+  return records;
+}
+
+/** Handle a chosen MIDI file: parse, persist to IDB, auto-split, then select. */
+async function handleMidiFile(file) {
   if (!file) return;
-  if (file.type && file.type !== 'application/pdf' &&
-      !/\.pdf$/i.test(file.name)) {
-    setStatus(`"${file.name}" doesn't look like a PDF — ignored.`);
+  if (!/\.midi?$/i.test(file.name) && !/midi/i.test(file.type || '')) {
+    setStatus(`"${file.name}" doesn't look like a MIDI file — ignored.`);
     return;
   }
   setStatus(`Loading "${file.name}"…`);
   try {
     const arrayBuffer = await readBlobAsArrayBuffer(file);
-    const pdfDoc = await loadPdfDocument(arrayBuffer);
+    let parsed;
+    try {
+      parsed = parseMidi(arrayBuffer);
+    } catch (err) {
+      setStatus(`Couldn't read "${file.name}": ${err.message || err}`);
+      return;
+    }
+    if (!parsed.notes.length) {
+      setStatus(`"${file.name}" has no playable notes — ignored.`);
+      return;
+    }
+
     const piece = {
       id: newPieceId(),
       title: titleFromFilename(file.name),
-      pageCount: pdfDoc.numPages,
+      durationSec: parsed.durationSec,
+      ticksPerQuarter: parsed.ticksPerQuarter,
+      noteCount: parsed.notes.length,
       addedAt: Date.now(),
-      pdfData: arrayBuffer,
-      pdfDoc,
-      sections: [], // freshly uploaded — no sections yet
+      notes: parsed.notes,
+      sections: [],
     };
 
-    // Persist BEFORE updating the UI so a refresh after upload always sees
-    // exactly what was rendered.
-    const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+    // Persist the raw MIDI bytes BEFORE updating the UI so a refresh always
+    // sees exactly what was imported.
+    const blob = new Blob([arrayBuffer], { type: 'audio/midi' });
     try {
       await savePiece(pieceToRecord(piece, blob));
     } catch (err) {
@@ -559,38 +587,24 @@ async function handlePdfFile(file) {
       );
     }
 
-    // Auto-create one section per page so the user has something to
-    // practice immediately after uploading.
-    const now = Date.now();
-    for (let p = 1; p <= piece.pageCount; p++) {
-      const sec = {
-        id: newSectionId(),
-        pieceId: piece.id,
-        name: `Page ${p}`,
-        pageNumber: p,
-        measures: '',
-        notes: '',
-        addedAt: now + p,   // slight offset keeps order deterministic
-        order: p,
-      };
-      const record = sectionToRecord(sec);
-      try { await saveSection(record); } catch (_) { /* best-effort */ }
-      piece.sections.push(record);
-    }
+    // Auto-split into phrase-based practice sections.
+    piece.sections = await buildSectionsForPiece(piece);
 
     pieces.push(piece);
     renderPieceList(pieces);
-    setStatus(`Added "${piece.title}" (${piece.pageCount} pages, ${piece.pageCount} sections created).`);
+    setStatus(
+      `Added "${piece.title}" (${piece.noteCount} notes, ${piece.sections.length} sections).`,
+    );
     selectPiece(piece.id);
   } catch (err) {
-    console.error('Failed to load PDF', err);
-    setStatus(`Failed to load PDF: ${err.message || err}`);
+    console.error('Failed to load MIDI', err);
+    setStatus(`Failed to load MIDI: ${err.message || err}`);
   }
 }
 
 // --- Selection -----------------------------------------------------------
 
-/** Switch the viewer to the given piece, lazy-loading PDF + sections if needed. */
+/** Switch the viewer to the given piece, lazy-loading MIDI + sections if needed. */
 async function selectPiece(pieceId) {
   const piece = pieces.find((p) => p.id === pieceId);
   if (!piece) return;
@@ -607,15 +621,14 @@ async function selectPiece(pieceId) {
   repCountsToday.clear();
 
   try {
-    await ensurePdfLoaded(piece);
+    await ensureMidiLoaded(piece);
   } catch (err) {
-    console.error('Failed to load PDF from storage', err);
+    console.error('Failed to load MIDI from storage', err);
     setStatus(`Failed to load "${piece.title}": ${err.message || err}`);
     return;
   }
 
-  // Load sections (and today's rep counts) in the background — they don't
-  // block PDF render.
+  // Load sections (and today's rep counts) in the background.
   ensureSectionsLoaded(piece)
     .then(() => refreshRepCountsForActivePiece())
     .then(() => {
@@ -624,31 +637,30 @@ async function selectPiece(pieceId) {
     .catch((err) => {
       console.warn('Could not load sections for piece', err);
       if (activePieceId === piece.id) {
-        // Fall back to whatever's already in memory; don't block the viewer.
         renderSectionsPanel();
       }
     });
 
-  showPdfViewer(piece);
+  showMidiViewer(piece);
 }
 
 /**
- * If the piece doesn't have a `pdfDoc` in memory yet, fetch its Blob from IDB
- * and instantiate one. Mutates the piece in place.
+ * If the piece doesn't have parsed `notes` in memory yet, fetch its MIDI Blob
+ * from IDB and parse it. Mutates the piece in place.
  */
-async function ensurePdfLoaded(piece) {
-  if (piece.pdfDoc) return;
+async function ensureMidiLoaded(piece) {
+  if (Array.isArray(piece.notes)) return;
   setStatus(`Loading "${piece.title}"…`);
   const blob = await getPieceBlob(piece.id);
   if (!blob) {
-    throw new Error('PDF data is missing from local storage');
+    throw new Error('MIDI data is missing from local storage');
   }
   const arrayBuffer = await readBlobAsArrayBuffer(blob);
-  piece.pdfData = arrayBuffer;
-  piece.pdfDoc = await loadPdfDocument(arrayBuffer);
-  if (piece.pdfDoc.numPages !== piece.pageCount) {
-    piece.pageCount = piece.pdfDoc.numPages;
-  }
+  const parsed = parseMidi(arrayBuffer);
+  piece.notes = parsed.notes;
+  piece.ticksPerQuarter = parsed.ticksPerQuarter;
+  piece.durationSec = parsed.durationSec;
+  piece.noteCount = parsed.notes.length;
 }
 
 /** Lazy-load a piece's sections from IDB, caching them on the piece. */
@@ -662,76 +674,16 @@ async function ensureSectionsLoaded(piece) {
   }
 }
 
-// --- PDF viewer ----------------------------------------------------------
+// --- MIDI viewer ---------------------------------------------------------
 
-/** Reveal the PDF viewer surface and (re-)render all pages of a piece. */
-async function showPdfViewer(piece) {
-  if (!els.viewerPdf || !els.viewerPlaceholder || !els.pdfPages) return;
+/** Reveal the MIDI viewer surface and stamp the piece's title/meta. */
+function showMidiViewer(piece) {
+  if (!els.viewerMidi || !els.viewerPlaceholder) return;
   els.viewerPlaceholder.hidden = true;
-  els.viewerPdf.hidden = false;
-  if (els.viewerPdfTitle) els.viewerPdfTitle.textContent = piece.title;
-  if (els.viewerPdfMeta) {
-    els.viewerPdfMeta.textContent =
-      piece.pageCount === 1 ? '1 page' : `${piece.pageCount} pages`;
-  }
-
-  const myToken = ++renderToken;
-  els.pdfPages.innerHTML = '';
-  const loading = document.createElement('div');
-  loading.className = 'pdf-page-loading';
-  loading.textContent = 'Rendering pages…';
-  els.pdfPages.appendChild(loading);
-
-  try {
-    const pageHosts = [];
-    els.pdfPages.innerHTML = '';
-    for (let i = 1; i <= piece.pageCount; i++) {
-      const host = document.createElement('div');
-      host.className = 'pdf-page';
-      host.dataset.pageNumber = String(i);
-
-      const label = document.createElement('span');
-      label.className = 'pdf-page-label';
-      label.textContent = `Page ${i}`;
-      host.appendChild(label);
-
-      els.pdfPages.appendChild(host);
-      pageHosts.push(host);
-    }
-
-    for (let i = 1; i <= piece.pageCount; i++) {
-      if (myToken !== renderToken) return;
-      const page = await piece.pdfDoc.getPage(i);
-      const viewport = page.getViewport({ scale: PDF_RENDER_SCALE });
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      canvas.width = Math.floor(viewport.width);
-      canvas.height = Math.floor(viewport.height);
-      pageHosts[i - 1].appendChild(canvas);
-      await page.render({ canvasContext: ctx, viewport }).promise;
-      if (myToken !== renderToken) return;
-      setStatus(`Rendered page ${i} of ${piece.pageCount} — "${piece.title}"`);
-    }
-    if (myToken === renderToken) {
-      setStatus(`Showing "${piece.title}" (${piece.pageCount} pages).`);
-    }
-  } catch (err) {
-    console.error('Failed to render PDF', err);
-    if (myToken === renderToken) {
-      setStatus(`Failed to render PDF: ${err.message || err}`);
-    }
-  }
-}
-
-/** Smoothly scroll the viewer to a given (1-based) PDF page. */
-function scrollToPage(pageNumber) {
-  if (!els.pdfPages) return;
-  const host = els.pdfPages.querySelector(
-    `.pdf-page[data-page-number="${pageNumber}"]`,
-  );
-  if (host) {
-    host.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
+  els.viewerMidi.hidden = false;
+  if (els.viewerMidiTitle) els.viewerMidiTitle.textContent = piece.title;
+  if (els.viewerMidiMeta) els.viewerMidiMeta.textContent = formatPieceMeta(piece);
+  setStatus(`Showing "${piece.title}" — pick a section to practice.`);
 }
 
 // --- Sections panel ------------------------------------------------------
@@ -842,11 +794,6 @@ function renderSectionsPanel() {
   }
   els.sectionsPanel.hidden = false;
 
-  // The form's max-page hint should reflect the active piece.
-  if (els.sectionPageInput) {
-    els.sectionPageInput.max = String(piece.pageCount);
-  }
-
   const sections = Array.isArray(piece.sections) ? piece.sections : [];
   els.sectionList.innerHTML = '';
 
@@ -854,7 +801,7 @@ function renderSectionsPanel() {
     const empty = document.createElement('li');
     empty.className = 'section-list-empty';
     empty.textContent =
-      'No sections yet. Break the piece into named chunks to track practice.';
+      'No sections yet. Use “Re-split” to break this piece into practice phrases.';
     els.sectionList.appendChild(empty);
     return;
   }
@@ -878,8 +825,8 @@ function renderSectionsPanel() {
     const main = document.createElement('button');
     main.type = 'button';
     main.className = 'section-list-main';
-    main.title = `Jump to page ${sec.pageNumber}`;
-    main.addEventListener('click', () => scrollToPage(sec.pageNumber));
+    main.title = `Practice "${sec.name}"`;
+    main.addEventListener('click', () => openPracticeView(sec.id));
 
     const name = document.createElement('span');
     name.className = 'section-list-name';
@@ -888,9 +835,7 @@ function renderSectionsPanel() {
 
     const meta = document.createElement('span');
     meta.className = 'section-list-meta';
-    const parts = [`Page ${sec.pageNumber}`];
-    if (sec.measures) parts.push(sec.measures);
-    meta.textContent = parts.join(' · ');
+    meta.textContent = formatSectionMeta(sec);
     main.appendChild(meta);
 
     // Per-section notes snippet (item 12a). Truncated via CSS to 2 lines.
@@ -1013,40 +958,19 @@ function openSectionForm(state) {
   sectionFormState = state;
 
   let nameVal = '';
-  let pageVal = '';
-  let measuresVal = '';
   let notesVal = '';
-  let titleText = 'New section';
-  pendingCrop = null;
 
-  if (state.mode === 'edit') {
-    const existing = (piece.sections || []).find((s) => s.id === state.id);
-    if (!existing) {
-      // Edited section vanished (e.g. concurrent delete) — fall back to add.
-      sectionFormState = { mode: 'add' };
-    } else {
-      nameVal = existing.name;
-      pageVal = String(existing.pageNumber);
-      measuresVal = existing.measures || '';
-      notesVal = existing.notes || '';
-      titleText = 'Edit section';
-      // Restore existing crop if present.
-      if (
-        typeof existing.cropY1 === 'number' &&
-        typeof existing.cropY2 === 'number'
-      ) {
-        pendingCrop = { y1: existing.cropY1, y2: existing.cropY2 };
-      }
-    }
+  // The form is edit-only — section ranges are auto-assigned.
+  const existing = (piece.sections || []).find((s) => s.id === state.id);
+  if (!existing) {
+    sectionFormState = null;
+    return;
   }
+  nameVal = existing.name;
+  notesVal = existing.notes || '';
 
-  if (els.sectionFormTitle) els.sectionFormTitle.textContent = titleText;
+  if (els.sectionFormTitle) els.sectionFormTitle.textContent = 'Edit section';
   if (els.sectionNameInput) els.sectionNameInput.value = nameVal;
-  if (els.sectionPageInput) {
-    els.sectionPageInput.value = pageVal;
-    els.sectionPageInput.max = String(piece.pageCount);
-  }
-  if (els.sectionMeasuresInput) els.sectionMeasuresInput.value = measuresVal;
   if (els.sectionNotesInput) els.sectionNotesInput.value = notesVal;
   if (els.sectionFormError) {
     els.sectionFormError.textContent = '';
@@ -1054,7 +978,6 @@ function openSectionForm(state) {
   }
 
   els.sectionForm.hidden = false;
-  updateCropStatusUI();
   if (els.sectionNameInput) {
     els.sectionNameInput.focus();
     els.sectionNameInput.select();
@@ -1063,166 +986,12 @@ function openSectionForm(state) {
 
 function closeSectionForm() {
   sectionFormState = null;
-  teardownCropOverlay();
-  pendingCrop = null;
-  updateCropStatusUI();
   if (!els.sectionForm) return;
   els.sectionForm.hidden = true;
   if (els.sectionFormError) {
     els.sectionFormError.textContent = '';
     els.sectionFormError.hidden = true;
   }
-}
-
-// --- Crop region overlay ---------------------------------------------------
-
-/** Update the crop status text and clear button visibility in the section form. */
-function updateCropStatusUI() {
-  if (!els.sectionCropStatus) return;
-  if (pendingCrop) {
-    const pct1 = Math.round(pendingCrop.y1 * 100);
-    const pct2 = Math.round(pendingCrop.y2 * 100);
-    els.sectionCropStatus.textContent = `Cropped: ${pct1}%–${pct2}% of page`;
-    els.sectionCropStatus.classList.add('has-crop');
-  } else {
-    els.sectionCropStatus.textContent = 'No crop set';
-    els.sectionCropStatus.classList.remove('has-crop');
-  }
-  if (els.sectionCropClearBtn) {
-    els.sectionCropClearBtn.hidden = !pendingCrop;
-  }
-}
-
-/** Remove any active crop overlay from the PDF pages area. */
-function teardownCropOverlay() {
-  if (cropOverlayCleanup) {
-    cropOverlayCleanup();
-    cropOverlayCleanup = null;
-  }
-}
-
-/**
- * Enter crop-selection mode: place a transparent overlay on the target PDF page
- * and let the user drag vertically to define a crop region.
- */
-function startCropSelection() {
-  teardownCropOverlay();
-  if (!els.pdfPages) return;
-
-  // Determine which page to draw on. Use the page number from the section form
-  // input, falling back to 1.
-  const pageNum = parseInt(
-    els.sectionPageInput ? els.sectionPageInput.value : '1',
-    10,
-  ) || 1;
-  const host = els.pdfPages.querySelector(
-    `.pdf-page[data-page-number="${pageNum}"]`,
-  );
-  if (!host) {
-    setStatus('Scroll to the target page first, then try again.');
-    return;
-  }
-
-  // Scroll the page into view so the user can see it.
-  host.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-  // Create overlay elements.
-  const overlay = document.createElement('div');
-  overlay.className = 'pdf-page-crop-overlay';
-
-  const dimTop = document.createElement('div');
-  dimTop.className = 'pdf-page-crop-dim';
-  dimTop.style.top = '0';
-
-  const selection = document.createElement('div');
-  selection.className = 'pdf-page-crop-selection';
-  selection.style.display = 'none';
-
-  const dimBottom = document.createElement('div');
-  dimBottom.className = 'pdf-page-crop-dim';
-
-  host.appendChild(dimTop);
-  host.appendChild(selection);
-  host.appendChild(dimBottom);
-  host.appendChild(overlay);
-
-  // If there's already a pending crop, show it.
-  if (pendingCrop) {
-    const h = host.offsetHeight;
-    const top = pendingCrop.y1 * h;
-    const bottom = pendingCrop.y2 * h;
-    selection.style.display = 'block';
-    selection.style.top = `${top}px`;
-    selection.style.height = `${bottom - top}px`;
-    dimTop.style.height = `${top}px`;
-    dimBottom.style.top = `${bottom}px`;
-    dimBottom.style.height = `${h - bottom}px`;
-  } else {
-    dimTop.style.height = '0';
-    dimBottom.style.height = '0';
-  }
-
-  let dragging = false;
-  let startY = 0;
-
-  function pointerToLocal(e) {
-    const rect = host.getBoundingClientRect();
-    return Math.max(0, Math.min(e.clientY - rect.top, rect.height));
-  }
-
-  function onDown(e) {
-    e.preventDefault();
-    dragging = true;
-    startY = pointerToLocal(e);
-    selection.style.display = 'block';
-    overlay.setPointerCapture(e.pointerId);
-  }
-
-  function onMove(e) {
-    if (!dragging) return;
-    const curY = pointerToLocal(e);
-    const top = Math.min(startY, curY);
-    const bottom = Math.max(startY, curY);
-    const h = host.offsetHeight;
-    selection.style.top = `${top}px`;
-    selection.style.height = `${bottom - top}px`;
-    dimTop.style.height = `${top}px`;
-    dimBottom.style.top = `${bottom}px`;
-    dimBottom.style.height = `${h - bottom}px`;
-  }
-
-  function onUp(e) {
-    if (!dragging) return;
-    dragging = false;
-    const curY = pointerToLocal(e);
-    const h = host.offsetHeight;
-    if (h === 0) return;
-    let y1 = Math.min(startY, curY) / h;
-    let y2 = Math.max(startY, curY) / h;
-    // Require at least 3% of the page height to avoid accidental clicks.
-    if (y2 - y1 < 0.03) return;
-    pendingCrop = { y1, y2 };
-    updateCropStatusUI();
-    setStatus(`Crop region set: ${Math.round(y1 * 100)}%–${Math.round(y2 * 100)}% of page ${pageNum}.`);
-    // Auto-close overlay after selection.
-    teardownCropOverlay();
-  }
-
-  overlay.addEventListener('pointerdown', onDown);
-  overlay.addEventListener('pointermove', onMove);
-  overlay.addEventListener('pointerup', onUp);
-
-  setStatus('Drag vertically on the page to select the crop region.');
-
-  cropOverlayCleanup = () => {
-    overlay.removeEventListener('pointerdown', onDown);
-    overlay.removeEventListener('pointermove', onMove);
-    overlay.removeEventListener('pointerup', onUp);
-    overlay.remove();
-    selection.remove();
-    dimTop.remove();
-    dimBottom.remove();
-  };
 }
 
 async function handleSectionFormSubmit(e) {
@@ -1233,11 +1002,9 @@ async function handleSectionFormSubmit(e) {
 
   const raw = {
     name: els.sectionNameInput ? els.sectionNameInput.value : '',
-    pageNumber: els.sectionPageInput ? els.sectionPageInput.value : '',
-    measures: els.sectionMeasuresInput ? els.sectionMeasuresInput.value : '',
+    notes: els.sectionNotesInput ? els.sectionNotesInput.value : '',
   };
-  const notesRaw = els.sectionNotesInput ? els.sectionNotesInput.value.trim() : '';
-  const result = validateSectionInput(raw, { maxPage: piece.pageCount });
+  const result = validateSectionInput(raw);
   if (!result.ok) {
     const messages = Object.values(result.errors);
     if (els.sectionFormError) {
@@ -1248,49 +1015,19 @@ async function handleSectionFormSubmit(e) {
   }
 
   const sections = Array.isArray(piece.sections) ? piece.sections : [];
-  let record;
 
-  if (sectionFormState.mode === 'edit') {
-    const existing = sections.find((s) => s.id === sectionFormState.id);
-    if (!existing) {
-      setStatus("That section was already removed — couldn't save changes.");
-      closeSectionForm();
-      renderSectionsPanel();
-      return;
-    }
-    const cropFields = pendingCrop
-      ? { cropY1: pendingCrop.y1, cropY2: pendingCrop.y2 }
-      : {};
-    record = sectionToRecord({
-      ...existing,
-      name: result.value.name,
-      pageNumber: result.value.pageNumber,
-      measures: result.value.measures,
-      notes: notesRaw,
-      ...cropFields,
-    });
-  } else {
-    // Append at the end of the current order range so new sections sort last
-    // until a future drag-to-reorder UI exists.
-    const maxOrder = sections.reduce(
-      (m, s) => (typeof s.order === 'number' && s.order > m ? s.order : m),
-      0,
-    );
-    const cropFieldsNew = pendingCrop
-      ? { cropY1: pendingCrop.y1, cropY2: pendingCrop.y2 }
-      : {};
-    record = sectionToRecord({
-      id: newSectionId(),
-      pieceId: piece.id,
-      name: result.value.name,
-      pageNumber: result.value.pageNumber,
-      measures: result.value.measures,
-      notes: notesRaw,
-      addedAt: Date.now(),
-      order: maxOrder + 1,
-      ...cropFieldsNew,
-    });
+  const existing = sections.find((s) => s.id === sectionFormState.id);
+  if (!existing) {
+    setStatus("That section was already removed — couldn't save changes.");
+    closeSectionForm();
+    renderSectionsPanel();
+    return;
   }
+  const record = sectionToRecord({
+    ...existing,
+    name: result.value.name,
+    notes: result.value.notes,
+  });
 
   try {
     await saveSection(record);
@@ -1305,19 +1042,12 @@ async function handleSectionFormSubmit(e) {
   }
 
   // Update the in-memory cache.
-  if (sectionFormState && sectionFormState.mode === 'edit') {
-    const i = sections.findIndex((s) => s.id === record.id);
-    if (i >= 0) sections[i] = record;
-    else sections.push(record);
-    setStatus(`Updated section "${record.name}".`);
-  } else {
-    sections.push(record);
-    setStatus(`Added section "${record.name}" on page ${record.pageNumber}.`);
-  }
-  // Mirror the new/updated section into the queue snapshot so that an
-  // edit (e.g. fixing a measure range) is reflected the next time the
-  // welcome card is shown — and so a future imported section with SRS
-  // fields would also appear immediately.
+  const i = sections.findIndex((s) => s.id === record.id);
+  if (i >= 0) sections[i] = record;
+  else sections.push(record);
+  setStatus(`Updated section "${record.name}".`);
+  // Mirror the updated section into the queue snapshot so an edit is
+  // reflected the next time the welcome card is shown.
   upsertQueueSection(record);
   // Re-sort by order then addedAt to match the persistence layer.
   sections.sort(
@@ -1373,72 +1103,43 @@ async function handleDeleteSection(sectionId) {
   renderStats();
 }
 
-// --- Practice panel (item 5) --------------------------------------------
-
-/** Open the practice panel for the given section. */
-// --- Section-scoped crop view ----------------------------------------------
+// --- Re-split sections ---------------------------------------------------
 
 /**
- * Apply CSS clipping to the PDF page so only the cropped region is visible.
- * Also hides all pages that don't belong to this section's page.
+ * Re-run the phrase-sectioning algorithm on the active piece, replacing all
+ * existing sections. Per-section practice progress (rep logs) and SRS state
+ * are discarded along with the old section ids, so confirm first.
  */
-function applySectionCrop(section) {
-  clearSectionCrop(); // always start clean
-  if (!els.pdfPages) return;
-
-  const hasCrop =
-    typeof section.cropY1 === 'number' &&
-    typeof section.cropY2 === 'number';
-
-  // Hide pages that aren't the section's page.
-  const allPages = els.pdfPages.querySelectorAll('.pdf-page');
-  for (const page of allPages) {
-    const num = parseInt(page.dataset.pageNumber, 10);
-    if (num !== section.pageNumber) {
-      page.dataset.cropHidden = 'true';
-      page.style.display = 'none';
-    }
-  }
-
-  if (!hasCrop) return;
-
-  // Find the target page host and its canvas.
-  const host = els.pdfPages.querySelector(
-    `.pdf-page[data-page-number="${section.pageNumber}"]`,
+async function handleResplitSections() {
+  const piece = getActivePiece();
+  if (!piece || !Array.isArray(piece.notes)) return;
+  const ok = window.confirm(
+    'Re-split this piece into fresh phrase sections? This discards the current ' +
+      'sections along with their practice progress and review schedule.',
   );
-  if (!host) return;
-  const canvas = host.querySelector('canvas');
-  if (!canvas) return;
+  if (!ok) return;
 
-  // Apply the crop-active class first so CSS `width: 100%` takes effect,
-  // then measure the resulting canvas height to compute pixel offsets.
-  host.classList.add('crop-active');
-  // Force a layout reflow so offsetHeight reflects the new CSS.
-  const displayHeight = canvas.offsetHeight;
-  const cropTopPx = section.cropY1 * displayHeight;
-  const cropBottomPx = section.cropY2 * displayHeight;
-  const visibleHeight = cropBottomPx - cropTopPx;
-
-  host.style.height = `${visibleHeight}px`;
-  canvas.style.marginTop = `${-cropTopPx}px`;
-}
-
-/** Remove all crop clipping from PDF pages, restoring the full view. */
-function clearSectionCrop() {
-  if (!els.pdfPages) return;
-  const allPages = els.pdfPages.querySelectorAll('.pdf-page');
-  for (const page of allPages) {
-    if (page.dataset.cropHidden) {
-      delete page.dataset.cropHidden;
-      page.style.display = '';
-    }
-    page.classList.remove('crop-active');
-    page.style.height = '';
-    const canvas = page.querySelector('canvas');
-    if (canvas) canvas.style.marginTop = '';
+  closePracticeView({ silent: true });
+  const old = Array.isArray(piece.sections) ? piece.sections : [];
+  try {
+    for (const s of old) await deleteSection(s.id);
+    if (old.length) await deleteRepLogsForSections(old.map((s) => s.id));
+  } catch (err) {
+    console.warn('Could not fully clear old sections', err);
   }
+  piece.sections = await buildSectionsForPiece(piece);
+  repCountsToday.clear();
+  setStatus(`Re-split "${piece.title}" into ${piece.sections.length} sections.`);
+  renderSectionsPanel();
+  await refreshReviewQueue();
+  renderReviewQueue();
+  await refreshStats();
+  renderStats();
 }
 
+// --- Practice panel ------------------------------------------------------
+
+/** Open the practice panel for the given section. */
 async function openPracticeView(sectionId) {
   const piece = getActivePiece();
   if (!piece || !Array.isArray(piece.sections)) return;
@@ -1468,10 +1169,9 @@ async function openPracticeView(sectionId) {
   showPracticePanel(section);
   renderPracticePanel();
   // Add the practicing layout class to reorder DOM visually.
-  if (els.viewerPdf) els.viewerPdf.classList.add('is-practicing');
-  // Apply crop clipping if the section has a crop region, then scroll.
-  applySectionCrop(section);
-  scrollToPage(section.pageNumber);
+  if (els.viewerMidi) els.viewerMidi.classList.add('is-practicing');
+  // Mount + arm the Synthesia engine for this section.
+  mountPlayer(piece, section);
 
   // Reconcile with IDB in case another tab / yesterday's count is stale.
   try {
@@ -1505,9 +1205,7 @@ function showPracticePanel(section) {
     els.practiceSectionName.textContent = section.name;
   }
   if (els.practiceSectionMeta) {
-    const parts = [`Page ${section.pageNumber}`];
-    if (section.measures) parts.push(section.measures);
-    els.practiceSectionMeta.textContent = parts.join(' · ');
+    els.practiceSectionMeta.textContent = formatSectionMeta(section);
   }
   if (els.practiceSectionNotes) {
     if (section.notes) {
@@ -1537,6 +1235,78 @@ function updatePracticeTotalTime(section) {
   } else {
     els.practiceTotalTime.textContent = '';
     els.practiceTotalTime.hidden = true;
+  }
+}
+
+// --- Synthesia engine integration ----------------------------------------
+
+/** Lazily create the player and load+arm it for the given section. */
+function mountPlayer(piece, section) {
+  if (!els.playerHost || typeof createPlayer !== 'function') return;
+  if (!player) {
+    player = createPlayer(els.playerHost, {
+      onRepComplete: recordCleanRun,
+      onMistake: () => {
+        setStatus('Wrong note — run reset. Play the section again from the top.');
+      },
+    });
+  }
+  player.resetCleanRunCount();
+  player.load(piece, section);
+  player.start();
+}
+
+/**
+ * A clean run-through was detected by the engine — this is the MIDI-era
+ * replacement for the old self-reported "Rep done" button. Persist one
+ * repetition toward today's goal of 10, reusing the exact same rep-log /
+ * queue / stats / SM-2 pipeline the button used.
+ */
+async function recordCleanRun() {
+  if (!practiceState) return;
+  const { sectionId, dateISO, count } = practiceState;
+  if (isRepGoalMet(count)) return;
+
+  // Optimistic update so the counter ticks immediately.
+  practiceState.count = count + 1;
+  practiceState.saving = true;
+  repCountsToday.set(sectionId, practiceState.count);
+  renderPracticePanel();
+
+  try {
+    const persisted = await incrementRepLog(sectionId, dateISO);
+    if (
+      practiceState &&
+      practiceState.sectionId === sectionId &&
+      practiceState.dateISO === dateISO
+    ) {
+      practiceState.count = persisted.count;
+      repCountsToday.set(sectionId, persisted.count);
+    }
+    setQueueRepCount(sectionId, persisted.count);
+    noteRepLogActivity(dateISO);
+    if (isRepGoalMet(persisted.count)) {
+      setStatus(`All ${persisted.count} clean runs done — pick a rating to schedule the next review.`);
+    } else {
+      setStatus(`Clean run ${persisted.count} of ${REP_GOAL}.`);
+    }
+  } catch (err) {
+    console.error('Failed to log clean run', err);
+    if (
+      practiceState &&
+      practiceState.sectionId === sectionId &&
+      practiceState.dateISO === dateISO
+    ) {
+      practiceState.count = count;
+      repCountsToday.set(sectionId, count);
+    }
+    setStatus(`Couldn't save that run: ${err.message || err}`);
+  } finally {
+    if (practiceState) practiceState.saving = false;
+    renderPracticePanel();
+    renderSectionsPanel();
+    renderReviewQueue();
+    renderStats();
   }
 }
 
@@ -1646,8 +1416,8 @@ function closePracticeView({ silent } = {}) {
     }
   }
   stopMetronome(); // item 12b — silence metronome when leaving practice
-  clearSectionCrop(); // restore full page view
-  if (els.viewerPdf) els.viewerPdf.classList.remove('is-practicing');
+  if (player) player.stop(); // stop the Synthesia engine + release MIDI input
+  if (els.viewerMidi) els.viewerMidi.classList.remove('is-practicing');
   const wasActive = !!practiceState;
   practiceState = null;
   if (els.practicePanel) els.practicePanel.hidden = true;
@@ -1696,32 +1466,15 @@ function renderPracticePanel() {
     els.practiceProgressFill.classList.toggle('is-complete', goalMet);
   }
 
-  if (els.practiceRepBtn) {
-    // Disable the button while a save is in flight, OR once the goal is met
-    // (preventing accidental over-counting). The user can still hit Undo to
-    // back off, or Reset, or Stop.
-    els.practiceRepBtn.disabled = saving || goalMet;
-    els.practiceRepBtn.classList.toggle('is-complete', goalMet);
-    const label = els.practiceRepBtn.querySelector('.practice-rep-btn-label');
-    if (label) {
-      label.textContent = goalMet
-        ? `Practiced ${count}× today`
-        : 'Successful repetition';
-    }
-  }
-
-  // Status copy. Once SM-2 has fired today, the "Next review" card carries
-  // the goal-met message; while the rating prompt is up it carries the
-  // "pick a rating" cue. We keep the status line quiet in those cases so we
-  // don't double up.
+  // Status copy. Once the goal is met, the rating prompt / next-review card
+  // carries the message, so keep the status line quiet there.
   if (els.practiceStatus) {
     if (goalMet) {
-      // The rating prompt OR the next-review card now carries the message.
       els.practiceStatus.hidden = true;
       els.practiceStatus.textContent = '';
     } else if (count === 0) {
       els.practiceStatus.textContent =
-        'Click after each clean run-through. You self-report — no audio detection.';
+        'Play the highlighted notes. Reach the end with zero wrong notes for a clean run — 10 clean runs completes the review.';
       els.practiceStatus.hidden = false;
     } else {
       els.practiceStatus.hidden = true;
@@ -1729,10 +1482,7 @@ function renderPracticePanel() {
     }
   }
 
-  // Either the rating prompt (item 8) OR the next-review card (item 6) is
-  // visible at any time, never both. The rating prompt only appears while
-  // the user owes us a rating for today; once they pick one (or had picked
-  // earlier today), the next-review card takes over.
+  // Either the rating prompt OR the next-review card is visible, never both.
   if (needsRating) {
     renderNextReview(null); // hide
     renderRatingPrompt(section);
@@ -1741,7 +1491,6 @@ function renderPracticePanel() {
     renderNextReview(section);
   }
 
-  if (els.practiceUndoBtn) els.practiceUndoBtn.disabled = saving || count <= 0;
   if (els.practiceResetBtn) els.practiceResetBtn.disabled = saving || count <= 0;
 }
 
@@ -1918,73 +1667,6 @@ async function handleRatingClick(quality, label) {
 }
 
 /** Handle a click of the big "Successful repetition" button. */
-async function handleRepClick() {
-  if (!practiceState) return;
-  const { sectionId, dateISO, count } = practiceState;
-  if (isRepGoalMet(count)) return;
-  // Past the early-return, `count` is always strictly below the goal.
-  // Whether the increment crosses the threshold is decided by the
-  // reconciled persisted count below.
-
-  // Optimistic update — the UI updates immediately so practice feels snappy.
-  practiceState.count = count + 1;
-  practiceState.saving = true;
-  repCountsToday.set(sectionId, practiceState.count);
-  renderPracticePanel();
-
-  try {
-    const persisted = await incrementRepLog(sectionId, dateISO);
-    // Reconcile against the persisted record in case it diverged (e.g. a
-    // background restore or another tab beat us to it).
-    if (
-      practiceState &&
-      practiceState.sectionId === sectionId &&
-      practiceState.dateISO === dateISO
-    ) {
-      practiceState.count = persisted.count;
-      repCountsToday.set(sectionId, persisted.count);
-    }
-    setQueueRepCount(sectionId, persisted.count);
-    // Note today as a practice day for the streak counter (idempotent).
-    noteRepLogActivity(dateISO);
-    const nowGoalMet = isRepGoalMet(persisted.count);
-    if (nowGoalMet) {
-      setStatus(`Nice — ${persisted.count} reps logged today. Pick a rating to schedule the next review.`);
-    } else {
-      setStatus(`Logged rep ${persisted.count} of ${REP_GOAL}.`);
-    }
-    // Item 8: SM-2 firing is no longer automatic. Once the rep count crosses
-    // the goal, renderPracticePanel surfaces the rating prompt; the user
-    // picks Again / Hard / Good / Easy and that handler calls
-    // fireSm2WithRating directly. The `lastReviewedDate` guard inside still
-    // exists so a same-day re-fire is a no-op.
-  } catch (err) {
-    console.error('Failed to log rep', err);
-    // Roll back the optimistic increment.
-    if (
-      practiceState &&
-      practiceState.sectionId === sectionId &&
-      practiceState.dateISO === dateISO
-    ) {
-      practiceState.count = count;
-      repCountsToday.set(sectionId, count);
-    }
-    setStatus(`Couldn't save rep: ${err.message || err}`);
-  } finally {
-    if (practiceState) practiceState.saving = false;
-    renderPracticePanel();
-    // Update the section row badge.
-    renderSectionsPanel();
-    // Repaint the queue — if this rep crossed the goal the section drops
-    // out of "Due today"; otherwise its progress chip ticks up.
-    renderReviewQueue();
-    // Stats panel: today's done-of-due may have ticked up (a rep crossing
-    // the goal counts as a section "done"), and the daily streak may have
-    // started today if this was the user's first rep of the day.
-    renderStats();
-  }
-}
-
 /**
  * Apply SM-2 with the user-chosen rating and persist the updated schedule
  * onto the section record. Called from the post-session rating prompt
@@ -2056,72 +1738,20 @@ function ratingLabelFor(quality) {
   return 'rated';
 }
 
-/** Decrement today's count by one (mistake-correction). */
-async function handleUndoRep() {
-  if (!practiceState) return;
-  const { sectionId, dateISO, count } = practiceState;
-  if (count <= 0) return;
-  const target = count - 1;
-
-  practiceState.saving = true;
-  practiceState.count = target;
-  repCountsToday.set(sectionId, target);
-  renderPracticePanel();
-
-  try {
-    const rec = await setRepLogCount(sectionId, dateISO, target);
-    const persisted = rec ? rec.count : 0;
-    if (
-      practiceState &&
-      practiceState.sectionId === sectionId &&
-      practiceState.dateISO === dateISO
-    ) {
-      practiceState.count = persisted;
-      repCountsToday.set(sectionId, persisted);
-    }
-    setQueueRepCount(sectionId, persisted);
-    setStatus(`Undid one rep — ${persisted} of ${REP_GOAL} today.`);
-  } catch (err) {
-    console.error('Failed to undo rep', err);
-    if (
-      practiceState &&
-      practiceState.sectionId === sectionId &&
-      practiceState.dateISO === dateISO
-    ) {
-      practiceState.count = count;
-      repCountsToday.set(sectionId, count);
-    }
-    setStatus(`Couldn't undo rep: ${err.message || err}`);
-  } finally {
-    if (practiceState) practiceState.saving = false;
-    renderPracticePanel();
-    renderSectionsPanel();
-    // The section may have just dropped back below the goal — re-evaluate
-    // whether it should reappear in the queue. (Note: per the design notes
-    // in the SM-2 entry, Undo / Reset DON'T roll back the SRS schedule, so
-    // a section that's already scheduled stays scheduled and won't actually
-    // re-appear in today's queue. The renderReviewQueue call is still safe
-    // and keeps the snapshot honest.)
-    renderReviewQueue();
-    // Today's done-count may have decremented if this Undo crossed the
-    // goal threshold downward; rerender the stats line to match.
-    renderStats();
-  }
-}
-
-/** Reset today's count to zero (after a confirm prompt). */
+/** Reset today's clean-run count to zero (after a confirm prompt). */
 async function handleResetReps() {
   if (!practiceState) return;
   const { sectionId, dateISO, count } = practiceState;
   if (count <= 0) return;
   const ok = window.confirm(
-    `Reset today's rep count for this section back to 0? You'll have to re-log them.`,
+    `Reset today's clean-run count for this section back to 0? You'll have to re-play them.`,
   );
   if (!ok) return;
 
   practiceState.saving = true;
   practiceState.count = 0;
   repCountsToday.set(sectionId, 0);
+  if (player) { player.resetCleanRunCount(); player.restartRun(true); }
   renderPracticePanel();
 
   try {
@@ -2172,7 +1802,7 @@ async function refreshReviewQueue() {
       pieceTitleById.set(p.id, {
         id: p.id,
         title: p.title,
-        pageCount: p.pageCount,
+        noteCount: p.noteCount,
       });
     }
     queueState = {
@@ -2312,10 +1942,8 @@ function renderReviewQueue() {
     pieceTitle.textContent = item.piece.title || '(unknown piece)';
     meta.appendChild(pieceTitle);
 
-    const locParts = [`Page ${item.section.pageNumber}`];
-    if (item.section.measures) locParts.push(item.section.measures);
     const loc = document.createElement('span');
-    loc.textContent = locParts.join(' · ');
+    loc.textContent = formatSectionMeta(item.section);
     meta.appendChild(loc);
 
     if (item.repCount > 0) {
@@ -2363,7 +1991,6 @@ async function handleReviewQueueClick(item) {
       return;
     }
     await openPracticeView(item.section.id);
-    scrollToPage(target.pageNumber);
   } catch (err) {
     console.error('Failed to jump from review queue', err);
     setStatus(`Couldn't open section: ${err.message || err}`);
@@ -2906,12 +2533,6 @@ async function handleImportFile(file) {
 
 // --- Boot ----------------------------------------------------------------
 
-function configurePdfJs() {
-  if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions) {
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
-  }
-}
-
 /**
  * Hydrate the in-memory piece list from IndexedDB on app open.
  * Failures here are non-fatal — the app still runs as an in-memory-only
@@ -2922,7 +2543,7 @@ async function hydrateFromStorage() {
     await openDb();
     const stored = await listPieceMetadata();
     for (const meta of stored) {
-      pieces.push({ ...meta }); // pdfDoc/pdfData/sections fill in on first select
+      pieces.push({ ...meta }); // notes/sections fill in on first select
     }
     renderPieceList(pieces);
     if (stored.length > 0) {
@@ -3141,7 +2762,6 @@ function init() {
     els.sidebarBackdrop.addEventListener('click', closeSidebar);
   }
 
-  configurePdfJs();
   setStatus(`Loading library…`);
 
   if (els.addPieceBtn && els.fileInput) {
@@ -3150,14 +2770,12 @@ function init() {
       const input = /** @type {HTMLInputElement} */ (e.target);
       const file = input.files && input.files[0];
       input.value = ''; // reset so picking the same file again retriggers
-      await handlePdfFile(file);
+      await handleMidiFile(file);
     });
   }
 
-  if (els.addSectionBtn) {
-    els.addSectionBtn.addEventListener('click', () =>
-      openSectionForm({ mode: 'add' }),
-    );
+  if (els.resplitBtn) {
+    els.resplitBtn.addEventListener('click', () => handleResplitSections());
   }
   if (els.sectionFormCancel) {
     els.sectionFormCancel.addEventListener('click', () => closeSectionForm());
@@ -3173,31 +2791,12 @@ function init() {
     });
   }
 
-  // Crop region buttons (section-scoped view).
-  if (els.sectionCropBtn) {
-    els.sectionCropBtn.addEventListener('click', () => startCropSelection());
-  }
-  if (els.sectionCropClearBtn) {
-    els.sectionCropClearBtn.addEventListener('click', () => {
-      pendingCrop = null;
-      teardownCropOverlay();
-      updateCropStatusUI();
-      setStatus('Crop region cleared.');
-    });
-  }
-
   // Section drag-to-reorder wiring (item 17).
   if (els.sectionList) {
     setupSectionDragAndDrop(els.sectionList);
   }
 
-  // Practice panel wiring (item 5).
-  if (els.practiceRepBtn) {
-    els.practiceRepBtn.addEventListener('click', handleRepClick);
-  }
-  if (els.practiceUndoBtn) {
-    els.practiceUndoBtn.addEventListener('click', handleUndoRep);
-  }
+  // Practice panel wiring.
   if (els.practiceResetBtn) {
     els.practiceResetBtn.addEventListener('click', handleResetReps);
   }
@@ -3267,15 +2866,15 @@ function init() {
  * Global keyboard shortcut handler (item 11 polish).
  *
  * Shortcuts:
- *   Space       — log a successful repetition (when practice panel is visible
- *                 and the rep button is enabled).
+ *   L           — listen to the current section (synth preview).
+ *   R           — restart the current run from the top.
  *   1 / 2 / 3 / 4 — pick Again / Hard / Good / Easy when the rating prompt is
  *                 visible.
- *   ArrowLeft / ArrowRight — previous / next PDF page (scroll to it).
  *   Escape      — close practice panel (if open) or close section form.
  *
  * Guard: suppressed when a text input, textarea, or contenteditable element is
- * focused — the user might be typing a section name or measure range.
+ * focused — the user might be typing a section name. (The player's opt-in
+ * computer-keyboard mode handles its own letter keys at capture phase.)
  */
 function handleGlobalKeydown(e) {
   // Don't hijack keys while the user is typing in an input field.
@@ -3288,19 +2887,24 @@ function handleGlobalKeydown(e) {
     return;
   }
 
+  const practising =
+    practiceState && els.practicePanel && !els.practicePanel.hidden;
+
   switch (e.key) {
-    case ' ': {
-      // Space = log rep (only when the practice panel is showing and the button
-      // is enabled — i.e. count < goal and no save in flight).
-      if (
-        practiceState &&
-        els.practicePanel &&
-        !els.practicePanel.hidden &&
-        els.practiceRepBtn &&
-        !els.practiceRepBtn.disabled
-      ) {
+    case 'l':
+    case 'L': {
+      if (practising && player) {
         e.preventDefault();
-        handleRepClick();
+        player.listen();
+      }
+      break;
+    }
+
+    case 'r':
+    case 'R': {
+      if (practising && player) {
+        e.preventDefault();
+        player.restartRun(true);
       }
       break;
     }
@@ -3326,15 +2930,6 @@ function handleGlobalKeydown(e) {
         e.preventDefault();
         handleRatingClick(ratingMap[e.key], labelMap[e.key]);
       }
-      break;
-    }
-
-    case 'ArrowLeft':
-    case 'ArrowRight': {
-      // Left/Right = scroll to previous/next PDF page in the viewer.
-      if (!els.viewerPdf || els.viewerPdf.hidden || !els.pdfPages) break;
-      e.preventDefault();
-      scrollByPage(e.key === 'ArrowLeft' ? -1 : 1);
       break;
     }
 
@@ -3389,29 +2984,16 @@ function handleGlobalKeydown(e) {
   }
 }
 
-/**
- * Scroll to the next or previous PDF page relative to the one currently most
- * visible in the viewport. `direction` is -1 (previous) or +1 (next).
- */
-function scrollByPage(direction) {
-  if (!els.pdfPages) return;
-  const pages = els.pdfPages.querySelectorAll('.pdf-page[data-page-number]');
-  if (pages.length === 0) return;
-
-  // Find the page closest to the top of the viewport.
-  let bestIdx = 0;
-  let bestDist = Infinity;
-  for (let i = 0; i < pages.length; i++) {
-    const rect = pages[i].getBoundingClientRect();
-    const dist = Math.abs(rect.top);
-    if (dist < bestDist) {
-      bestDist = dist;
-      bestIdx = i;
-    }
-  }
-
-  const targetIdx = Math.max(0, Math.min(pages.length - 1, bestIdx + direction));
-  pages[targetIdx].scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
 document.addEventListener('DOMContentLoaded', init);
+
+// ---- Node export shim (browser-safe) ------------------------------------
+// Lets the Node test suite import the pure helper(s) in this file. `module`
+// is undefined in the browser (classic <script>), so this is skipped there.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    titleFromFilename,
+    formatClock,
+    formatPieceMeta,
+    formatSectionMeta,
+  };
+}

@@ -5,10 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PianoSRS</title>
   <link rel="stylesheet" href="styles.css" />
-  <!-- PDF.js v3.11.174 from cdnjs. The non-module build exposes the global
-       `pdfjsLib`, which works reliably when index.html is opened via file://
-       (ES-module imports from CDN tend to be blocked by CORS in that case). -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body>
   <header class="app-header">
@@ -33,17 +29,17 @@
         </button>
         <!-- Hidden file input; triggered by the button above. -->
         <input
-          id="pdf-file-input"
+          id="midi-file-input"
           class="visually-hidden"
           type="file"
-          accept="application/pdf,.pdf"
+          accept=".mid,.midi,audio/midi,audio/x-midi"
           aria-hidden="true"
           tabindex="-1"
         />
       </div>
       <ul id="piece-list" class="piece-list" aria-live="polite">
         <li class="piece-list-empty">
-          No pieces yet. Click <strong>+ Add piece</strong> to upload a PDF.
+          No pieces yet. Click <strong>+ Add piece</strong> to load a MIDI file.
         </li>
       </ul>
       <div class="sidebar-footer">
@@ -146,33 +142,39 @@
         <div id="viewer-placeholder-welcome" class="viewer-placeholder-welcome">
           <h2>Welcome</h2>
           <p>
-            Upload a PDF of a piano piece to get started, then select it from the
-            library to view the sheet music. Once you've broken a piece into
-            sections and rated a few, your "Due today" queue appears here on
-            every app open.
+            Load a MIDI file of a piano piece to get started. PianoSRS splits it
+            into short practice sections automatically and shows the notes
+            falling Synthesia-style over a keyboard. Connect a MIDI keyboard
+            (or use the on-screen / computer keys) and play each section
+            cleanly <strong>10 times in a row</strong> to complete a review.
           </p>
           <p class="viewer-hint">
             Pieces you add are saved locally in your browser (IndexedDB) and
-            reload automatically on your next visit.
+            reload automatically on your next visit. Note detection uses the
+            Web MIDI API — best in Chrome or Edge.
           </p>
         </div>
       </div>
-      <div id="viewer-pdf" class="viewer-pdf" hidden>
-        <header class="viewer-pdf-header">
-          <h2 id="viewer-pdf-title" class="viewer-pdf-title"></h2>
-          <span id="viewer-pdf-meta" class="viewer-pdf-meta"></span>
+
+      <div id="viewer-midi" class="viewer-midi" hidden>
+        <header class="viewer-midi-header">
+          <h2 id="viewer-midi-title" class="viewer-midi-title"></h2>
+          <span id="viewer-midi-meta" class="viewer-midi-meta"></span>
         </header>
 
         <section id="sections-panel" class="sections-panel" aria-label="Sections" hidden>
           <header class="sections-panel-header">
             <h3>Sections</h3>
-            <button id="add-section-btn" class="btn" type="button">
-              + Add section
+            <span class="sections-panel-hint">Auto-split into phrases</span>
+            <button id="resplit-sections-btn" class="btn btn-sm" type="button">
+              Re-split
             </button>
           </header>
 
+          <!-- Edit-only form: a section's note range is assigned automatically,
+               so the form only edits its name and practice notes. -->
           <form id="section-form" class="section-form" hidden novalidate>
-            <h4 id="section-form-title" class="section-form-title">New section</h4>
+            <h4 id="section-form-title" class="section-form-title">Edit section</h4>
             <div class="section-form-grid">
               <label class="section-form-field section-form-field-name">
                 <span class="section-form-label">Name</span>
@@ -181,28 +183,7 @@
                   type="text"
                   required
                   maxlength="100"
-                  placeholder="e.g. Exposition"
-                  autocomplete="off"
-                />
-              </label>
-              <label class="section-form-field section-form-field-page">
-                <span class="section-form-label">Page</span>
-                <input
-                  id="section-page-input"
-                  type="number"
-                  min="1"
-                  step="1"
-                  required
-                  inputmode="numeric"
-                />
-              </label>
-              <label class="section-form-field section-form-field-measures">
-                <span class="section-form-label">Measures</span>
-                <input
-                  id="section-measures-input"
-                  type="text"
-                  maxlength="200"
-                  placeholder="e.g. mm. 17–32"
+                  placeholder="e.g. Phrase 1"
                   autocomplete="off"
                 />
               </label>
@@ -213,22 +194,10 @@
                 id="section-notes-input"
                 maxlength="2000"
                 rows="3"
-                placeholder="e.g. RH 1-2-3-5 in mm. 17, watch LH crossover at m. 24…"
+                placeholder="e.g. RH 1-2-3-5, watch the LH crossover…"
                 autocomplete="off"
               ></textarea>
             </label>
-            <div class="section-form-field section-form-field-crop">
-              <span class="section-form-label">Crop region</span>
-              <div class="section-crop-controls">
-                <button id="section-crop-btn" type="button" class="btn btn-sm">
-                  Select on page
-                </button>
-                <button id="section-crop-clear-btn" type="button" class="btn btn-sm" hidden>
-                  Clear crop
-                </button>
-                <span id="section-crop-status" class="section-crop-status">No crop set</span>
-              </div>
-            </div>
             <p
               id="section-form-error"
               class="section-form-error"
@@ -284,7 +253,7 @@
               <span id="practice-count" class="practice-count">0</span>
               <span class="practice-count-divider">/</span>
               <span id="practice-goal" class="practice-goal">10</span>
-              <span class="practice-count-label">reps</span>
+              <span class="practice-count-label">clean runs</span>
             </div>
             <div
               id="practice-progress-track"
@@ -296,15 +265,11 @@
             >
               <div id="practice-progress-fill" class="practice-progress-fill"></div>
             </div>
-            <button
-              id="practice-rep-btn"
-              type="button"
-              class="practice-rep-btn"
-            >
-              <span class="practice-rep-btn-icon" aria-hidden="true">&#10003;</span>
-              <span class="practice-rep-btn-label">Rep done</span>
-            </button>
           </div>
+
+          <!-- The Synthesia engine (falling notes + keyboard + input + controls)
+               builds its own DOM inside this host (see player.js). -->
+          <div id="player-host" class="player-host"></div>
 
           <p id="practice-status" class="practice-status" hidden></p>
 
@@ -337,13 +302,6 @@
           ></p>
 
           <div class="practice-secondary-actions">
-            <button
-              id="practice-undo-btn"
-              type="button"
-              class="btn btn-sm"
-            >
-              Undo last rep
-            </button>
             <button
               id="practice-reset-btn"
               type="button"
@@ -391,32 +349,33 @@
           </section>
 
           <p class="practice-shortcuts-hint">
-            <kbd>Space</kbd> log rep &middot;
+            <kbd>A</kbd>&hairsp;-&hairsp;<kbd>'</kbd> on-screen keys &middot;
+            <kbd>L</kbd> listen &middot;
+            <kbd>R</kbd> restart run &middot;
             <kbd>1</kbd>-<kbd>4</kbd> rate &middot;
-            <kbd>&larr;</kbd><kbd>&rarr;</kbd> page &middot;
             <kbd>Esc</kbd> stop &middot;
             <kbd>M</kbd> metronome &middot;
             <kbd>T</kbd> pause timer &middot;
             <kbd>D</kbd> dark mode
           </p>
         </section>
-
-        <div id="pdf-pages" class="pdf-pages" aria-live="polite"></div>
       </div>
     </section>
   </main>
 
   <footer class="app-footer">
     <span id="app-status">Ready</span>
-    <span class="app-version">v0.19.0 &middot; dev</span>
+    <span class="app-version">v0.20.0 &middot; midi</span>
   </footer>
 
   <!-- Load as classic scripts (not modules) so the app works from file://
-       without a local server. Chrome blocks ES module imports over file://
-       due to CORS. Order matters: db → srs → metronome → app. -->
+       without a local server. Order matters: db → srs → midi → metronome →
+       player → app. -->
   <script src="db.js"></script>
   <script src="srs.js"></script>
+  <script src="midi.js"></script>
   <script src="metronome.js"></script>
+  <script src="player.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 // Tests for the section pure helpers in db.js
-// (sectionToRecord, validateSectionInput).
+// (sectionToRecord, validateSectionInput) — MIDI era.
 //
 // db.js only touches `indexedDB` lazily inside `openDb()`, so importing it in
 // Node is safe without any DOM stub. Run from the project root:
@@ -13,106 +13,63 @@ const mod = await import('../db.js');
 {
   const r = mod.validateSectionInput({
     name: '  Exposition  ',
-    pageNumber: '3',
-    measures: '  mm. 17–32  ',
-  }, { maxPage: 10 });
+    notes: '  RH 1-2-3-5  ',
+  });
   assert.equal(r.ok, true, 'valid input is accepted');
   assert.deepEqual(r.value, {
     name: 'Exposition',
-    pageNumber: 3,
-    measures: 'mm. 17–32',
-  }, 'fields are trimmed and the page is coerced to a number');
+    notes: 'RH 1-2-3-5',
+  }, 'name and notes are trimmed');
 }
 
-// --- empty measures is allowed ----------------------------------------------
+// --- empty notes is allowed --------------------------------------------------
 {
-  const r = mod.validateSectionInput({
-    name: 'A',
-    pageNumber: 1,
-    measures: '',
-  }, { maxPage: 5 });
-  assert.equal(r.ok, true, 'empty measures is allowed');
-  assert.equal(r.value.measures, '');
+  const r = mod.validateSectionInput({ name: 'A', notes: '' });
+  assert.equal(r.ok, true, 'empty notes is allowed');
+  assert.equal(r.value.notes, '');
 }
 
-// --- missing name fails -----------------------------------------------------
+// --- missing notes is allowed (defaults to empty) ----------------------------
 {
-  const r = mod.validateSectionInput({ name: '   ', pageNumber: 1 });
+  const r = mod.validateSectionInput({ name: 'A' });
+  assert.equal(r.ok, true);
+  assert.equal(r.value.notes, '');
+}
+
+// --- missing name fails ------------------------------------------------------
+{
+  const r = mod.validateSectionInput({ name: '   ', notes: 'x' });
   assert.equal(r.ok, false);
   assert.ok(r.errors.name, 'reports a name error');
-  assert.equal(r.errors.pageNumber, undefined, 'page is fine, not flagged');
+  assert.equal(r.errors.notes, undefined, 'notes is fine, not flagged');
 }
 
-// --- bad page numbers -------------------------------------------------------
-for (const bad of [0, -1, 1.5, 'abc', '', null, undefined, NaN]) {
-  const r = mod.validateSectionInput({ name: 'X', pageNumber: bad });
-  assert.equal(r.ok, false, `pageNumber=${JSON.stringify(bad)} is rejected`);
-  assert.ok(r.errors.pageNumber, `pageNumber=${JSON.stringify(bad)} reports a page error`);
-}
-
-// --- page above maxPage is rejected -----------------------------------------
+// --- name length cap ---------------------------------------------------------
 {
-  const r = mod.validateSectionInput(
-    { name: 'X', pageNumber: 11 },
-    { maxPage: 10 },
-  );
-  assert.equal(r.ok, false);
-  assert.match(r.errors.pageNumber, /1 and 10/);
-}
-
-// --- maxPage = 1 produces a friendlier message ------------------------------
-{
-  const r = mod.validateSectionInput(
-    { name: 'X', pageNumber: 2 },
-    { maxPage: 1 },
-  );
-  assert.equal(r.ok, false);
-  assert.match(r.errors.pageNumber, /only 1 page/);
-}
-
-// --- maxPage absent => no upper bound check ---------------------------------
-{
-  const r = mod.validateSectionInput({ name: 'X', pageNumber: 9999 });
-  assert.equal(r.ok, true, 'with no maxPage, large pages are allowed');
-}
-
-// --- name length cap --------------------------------------------------------
-{
-  const r = mod.validateSectionInput({
-    name: 'a'.repeat(101),
-    pageNumber: 1,
-  });
+  const r = mod.validateSectionInput({ name: 'a'.repeat(101) });
   assert.equal(r.ok, false);
   assert.match(r.errors.name, /100/);
 }
 
-// --- measures length cap ----------------------------------------------------
+// --- notes length cap --------------------------------------------------------
 {
-  const r = mod.validateSectionInput({
-    name: 'X',
-    pageNumber: 1,
-    measures: 'm'.repeat(201),
-  });
+  const r = mod.validateSectionInput({ name: 'X', notes: 'm'.repeat(2001) });
   assert.equal(r.ok, false);
-  assert.match(r.errors.measures, /200/);
+  assert.match(r.errors.notes, /2000/);
 }
 
-// --- multiple errors are all reported --------------------------------------
-{
-  const r = mod.validateSectionInput({ name: '', pageNumber: 0 });
-  assert.equal(r.ok, false);
-  assert.ok(r.errors.name && r.errors.pageNumber,
-    'both name and page errors are surfaced together');
-}
-
-// --- sectionToRecord: full passthrough --------------------------------------
+// --- sectionToRecord: full MIDI passthrough ----------------------------------
 {
   const rec = mod.sectionToRecord({
     id: 's_1',
     pieceId: 'p_a',
     name: 'A',
-    pageNumber: 2,
-    measures: 'mm. 1–8',
+    startTick: 0,
+    endTick: 960,
+    startSec: 0,
+    endSec: 2,
+    noteCount: 8,
+    notes: 'legato',
     addedAt: 1000,
     order: 5,
   });
@@ -120,86 +77,74 @@ for (const bad of [0, -1, 1.5, 'abc', '', null, undefined, NaN]) {
     id: 's_1',
     pieceId: 'p_a',
     name: 'A',
-    pageNumber: 2,
-    measures: 'mm. 1–8',
-    notes: '',
+    startTick: 0,
+    endTick: 960,
+    startSec: 0,
+    endSec: 2,
+    noteCount: 8,
+    notes: 'legato',
     addedAt: 1000,
     order: 5,
   });
 }
 
-// --- sectionToRecord: addedAt + order auto-fill, order defaults to addedAt --
+// --- sectionToRecord: tick/second range defaults to 0 when absent ------------
+{
+  const rec = mod.sectionToRecord({ id: 's_r', pieceId: 'p_a', name: 'R' });
+  assert.equal(rec.startTick, 0);
+  assert.equal(rec.endTick, 0);
+  assert.equal(rec.startSec, 0);
+  assert.equal(rec.endSec, 0);
+  assert.equal(rec.noteCount, 0);
+}
+
+// --- sectionToRecord: addedAt + order auto-fill, order defaults to addedAt ---
 {
   const before = Date.now();
-  const rec = mod.sectionToRecord({
-    id: 's_2', pieceId: 'p_a', name: 'B', pageNumber: 1,
-  });
+  const rec = mod.sectionToRecord({ id: 's_2', pieceId: 'p_a', name: 'B' });
   const after = Date.now();
   assert.equal(typeof rec.addedAt, 'number');
   assert.ok(rec.addedAt >= before && rec.addedAt <= after,
     'auto-filled addedAt is within the call window');
   assert.equal(rec.order, rec.addedAt,
     'auto-filled order matches addedAt by default');
-  assert.equal(rec.measures, '', 'missing measures becomes empty string');
 }
 
-// --- sectionToRecord: explicit addedAt: 0 is preserved ----------------------
+// --- sectionToRecord: explicit addedAt: 0 / order: 0 preserved ---------------
 {
   const rec = mod.sectionToRecord({
-    id: 's_3', pieceId: 'p_a', name: 'C', pageNumber: 1, addedAt: 0,
+    id: 's_3', pieceId: 'p_a', name: 'C', addedAt: 0,
   });
   assert.equal(rec.addedAt, 0, 'explicit addedAt: 0 is preserved');
   assert.equal(rec.order, 0, 'order falls back to addedAt (0) when missing');
-}
 
-// --- sectionToRecord: explicit order: 0 is preserved ------------------------
-{
-  const rec = mod.sectionToRecord({
-    id: 's_4', pieceId: 'p_a', name: 'D', pageNumber: 1,
-    addedAt: 9999, order: 0,
+  const rec2 = mod.sectionToRecord({
+    id: 's_4', pieceId: 'p_a', name: 'D', addedAt: 9999, order: 0,
   });
-  assert.equal(rec.order, 0, 'explicit order: 0 is preserved');
+  assert.equal(rec2.order, 0, 'explicit order: 0 is preserved');
 }
 
-// --- sectionToRecord: notes field passthrough (item 12a) --------------------
+// --- sectionToRecord: notes field passthrough --------------------------------
 {
   const rec = mod.sectionToRecord({
-    id: 's_notes1', pieceId: 'p_a', name: 'WithNotes', pageNumber: 1,
-    notes: 'RH 1-2-3-5 crossover at m. 24',
+    id: 's_n1', pieceId: 'p_a', name: 'WithNotes',
+    notes: 'RH 1-2-3-5 crossover',
   });
-  assert.equal(rec.notes, 'RH 1-2-3-5 crossover at m. 24',
-    'notes string is preserved');
-}
+  assert.equal(rec.notes, 'RH 1-2-3-5 crossover');
 
-// --- sectionToRecord: missing notes becomes empty string --------------------
-{
-  const rec = mod.sectionToRecord({
-    id: 's_notes2', pieceId: 'p_a', name: 'NoNotes', pageNumber: 1,
+  const rec2 = mod.sectionToRecord({ id: 's_n2', pieceId: 'p_a', name: 'NoNotes' });
+  assert.equal(rec2.notes, '', 'missing notes defaults to empty string');
+
+  const rec3 = mod.sectionToRecord({
+    id: 's_n3', pieceId: 'p_a', name: 'BadNotes', notes: 42,
   });
-  assert.equal(rec.notes, '', 'missing notes defaults to empty string');
+  assert.equal(rec3.notes, '', 'non-string notes becomes empty string');
 }
 
-// --- sectionToRecord: non-string notes becomes empty string -----------------
+// --- sectionToRecord: SRS fields are passed through when present -------------
 {
   const rec = mod.sectionToRecord({
-    id: 's_notes3', pieceId: 'p_a', name: 'BadNotes', pageNumber: 1,
-    notes: 42,
-  });
-  assert.equal(rec.notes, '', 'non-string notes becomes empty string');
-}
-
-// --- sectionToRecord: non-string measures becomes empty string --------------
-{
-  const rec = mod.sectionToRecord({
-    id: 's_5', pieceId: 'p_a', name: 'E', pageNumber: 1, measures: null,
-  });
-  assert.equal(rec.measures, '');
-}
-
-// --- sectionToRecord: SRS fields (item 6) are passed through when present ---
-{
-  const rec = mod.sectionToRecord({
-    id: 's_6', pieceId: 'p_a', name: 'F', pageNumber: 1,
+    id: 's_6', pieceId: 'p_a', name: 'F',
     repetitions: 3, interval: 15, ease: 2.36,
     nextDue: '2026-05-13', lastReviewedDate: '2026-04-28',
   });
@@ -210,25 +155,20 @@ for (const bad of [0, -1, 1.5, 'abc', '', null, undefined, NaN]) {
   assert.equal(rec.lastReviewedDate, '2026-04-28');
 }
 
-// --- sectionToRecord: SRS fields are OMITTED when absent --------------------
+// --- sectionToRecord: SRS fields are OMITTED when absent ---------------------
 {
-  // Legacy section save (or a freshly-added section before the first SM-2
-  // fire) must not gain empty SRS fields — keeps the on-disk record exactly
-  // the same shape it was before item 6 shipped.
-  const rec = mod.sectionToRecord({
-    id: 's_7', pieceId: 'p_a', name: 'G', pageNumber: 1,
-  });
-  assert.equal('repetitions' in rec, false, 'no repetitions key on legacy save');
-  assert.equal('interval' in rec, false, 'no interval key on legacy save');
-  assert.equal('ease' in rec, false, 'no ease key on legacy save');
-  assert.equal('nextDue' in rec, false, 'no nextDue key on legacy save');
-  assert.equal('lastReviewedDate' in rec, false, 'no lastReviewedDate key on legacy save');
+  const rec = mod.sectionToRecord({ id: 's_7', pieceId: 'p_a', name: 'G' });
+  assert.equal('repetitions' in rec, false, 'no repetitions key when unrated');
+  assert.equal('interval' in rec, false);
+  assert.equal('ease' in rec, false);
+  assert.equal('nextDue' in rec, false);
+  assert.equal('lastReviewedDate' in rec, false);
 }
 
 // --- sectionToRecord: malformed SRS fields are dropped ----------------------
 {
   const rec = mod.sectionToRecord({
-    id: 's_8', pieceId: 'p_a', name: 'H', pageNumber: 1,
+    id: 's_8', pieceId: 'p_a', name: 'H',
     repetitions: 'three', interval: NaN, ease: Infinity,
     nextDue: '', lastReviewedDate: 42,
   });
@@ -241,11 +181,8 @@ for (const bad of [0, -1, 1.5, 'abc', '', null, undefined, NaN]) {
 
 // --- sectionToRecord: explicit zeros for repetitions/interval are preserved -
 {
-  // After an "Again" rating, repetitions and interval can both legitimately
-  // be the lowest valid values (0 and 1) — make sure the optional-field
-  // logic doesn't accidentally drop them.
   const rec = mod.sectionToRecord({
-    id: 's_9', pieceId: 'p_a', name: 'I', pageNumber: 1,
+    id: 's_9', pieceId: 'p_a', name: 'I',
     repetitions: 0, interval: 1, ease: 1.7,
     nextDue: '2026-04-29', lastReviewedDate: '2026-04-28',
   });

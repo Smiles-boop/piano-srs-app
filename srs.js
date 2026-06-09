@@ -631,3 +631,32 @@ function clampQuality(q) {
 function isISODate(s) {
   return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
+
+// ---- Node export shim (browser-safe) ------------------------------------
+// In the browser these are plain globals (classic <script>). Under Node the
+// object-literal assignment is picked up by the CJS→ESM interop so the test
+// files can `import` them. `module` is undefined in the browser, so this is
+// skipped there with no error.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    EASE_DEFAULT,
+    EASE_MIN,
+    RATING_AGAIN,
+    RATING_HARD,
+    RATING_GOOD,
+    RATING_EASY,
+    MASTERY_INTERVAL_DAYS,
+    defaultSrsState,
+    srsStateForSection,
+    updateEase,
+    applySm2,
+    addDaysISO,
+    daysBetweenISO,
+    describeNextDue,
+    previewSm2Outcomes,
+    buildReviewQueue,
+    isSectionMastered,
+    computeDailyStreak,
+    summariseProgress,
+  };
+}

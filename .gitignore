@@ -1,0 +1,5 @@
+# Generated bundle (optional build artifact from build.js)
+bundle.js
+
+# macOS
+.DS_Store
