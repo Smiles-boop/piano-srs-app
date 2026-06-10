@@ -528,7 +528,9 @@ async function listAllRepLogs() {
 /**
  * Atomically add elapsed practice milliseconds to a section's
  * `totalPracticeMs` field. Uses get-then-put in a single readwrite
- * transaction so concurrent tabs can't lose an increment.
+ * transaction so concurrent tabs can't lose an increment. Also stamps
+ * `lastPracticedAt` (epoch ms) so the dashboard can surface a "Continue
+ * practicing" list ordered by recency.
  *
  * Resolves with the new total.
  */
@@ -544,6 +546,7 @@ async function addPracticeTime(sectionId, elapsedMs) {
       if (!rec) { resolve(0); return; }
       const prev = typeof rec.totalPracticeMs === 'number' ? rec.totalPracticeMs : 0;
       rec.totalPracticeMs = prev + Math.round(elapsedMs);
+      rec.lastPracticedAt = Date.now();
       const putReq = store.put(rec);
       putReq.onsuccess = () => resolve(rec.totalPracticeMs);
       putReq.onerror = () => reject(putReq.error || new Error('IDB practice-time put failed'));
@@ -655,6 +658,16 @@ function sectionToRecord(section) {
     section.totalPracticeMs > 0
   ) {
     record.totalPracticeMs = section.totalPracticeMs;
+  }
+  // "Continue practicing" — epoch ms of the most recent practice session.
+  // Optional + only carried through when present, so legacy records and plain
+  // edits don't gain or clobber the field.
+  if (
+    typeof section.lastPracticedAt === 'number' &&
+    Number.isFinite(section.lastPracticedAt) &&
+    section.lastPracticedAt > 0
+  ) {
+    record.lastPracticedAt = section.lastPracticedAt;
   }
   return record;
 }

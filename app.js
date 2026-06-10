@@ -73,7 +73,7 @@
 // Dependencies loaded via classic <script> tags in index.html (db.js,
 // srs.js, metronome.js) — all symbols are available as globals.
 
-const APP_VERSION = '0.20.0'; // MIDI + Synthesia practice with note detection
+const APP_VERSION = '0.22.0'; // Home dashboard: forecast, goal ring, guided review
 
 const els = {
   status: document.getElementById('app-status'),
@@ -142,6 +142,35 @@ const els = {
   statsRatedDetail: document.getElementById('stats-rated-detail'),
   statsPerPiece: document.getElementById('stats-per-piece'),
   statsPerPieceList: document.getElementById('stats-per-piece-list'),
+  // Time-invested tile (home dashboard)
+  statsTimeValue: document.getElementById('stats-time-value'),
+  statsTimeDetail: document.getElementById('stats-time-detail'),
+  // Daily-goal ring (home dashboard)
+  statsGoal: document.getElementById('stats-goal'),
+  statsGoalRingFill: document.getElementById('stats-goal-ring-fill'),
+  statsGoalRingLabel: document.getElementById('stats-goal-ring-label'),
+  statsGoalDone: document.getElementById('stats-goal-done'),
+  statsGoalTarget: document.getElementById('stats-goal-target'),
+  statsGoalValue: document.getElementById('stats-goal-value'),
+  statsGoalDec: document.getElementById('stats-goal-dec'),
+  statsGoalInc: document.getElementById('stats-goal-inc'),
+  // Recall-maturity distribution (home dashboard)
+  statsMemory: document.getElementById('stats-memory'),
+  statsMemoryBar: document.getElementById('stats-memory-bar'),
+  statsMemoryLegend: document.getElementById('stats-memory-legend'),
+  // Due-soon forecast (home dashboard)
+  statsForecast: document.getElementById('stats-forecast'),
+  statsForecastBars: document.getElementById('stats-forecast-bars'),
+  // Start-daily-review + overdue callout (home dashboard)
+  startReviewBtn: document.getElementById('start-review-btn'),
+  reviewQueueOverdue: document.getElementById('review-queue-overdue'),
+  // Continue-practicing panel (home dashboard)
+  continuePanel: document.getElementById('continue-panel'),
+  continueList: document.getElementById('continue-list'),
+  // Guided review-session bar (practice panel)
+  reviewSessionBar: document.getElementById('review-session-bar'),
+  reviewSessionProgress: document.getElementById('review-session-progress'),
+  reviewSessionSkip: document.getElementById('review-session-skip'),
   // Practice history chart (item 12c)
   statsHistoryChart: document.getElementById('stats-history-chart'),
   statsHistoryChartContainer: document.getElementById('stats-history-chart-container'),
@@ -261,6 +290,31 @@ let queueClickInFlight = false;
  *   }
  */
 let statsState = null;
+
+/**
+ * Most recent progress summary from `summariseProgress`, stashed so the
+ * daily-goal +/- controls can recompute the ring against today's numbers
+ * without re-walking the section list.
+ */
+let lastStatsSummary = null;
+
+/**
+ * Guided "daily review" session (home dashboard). `null` when not running;
+ * otherwise `{ items: Array<queueItem>, index: number }`. The items are the
+ * due-queue snapshot captured when the session started — we walk them by
+ * index so completing or skipping a section never re-opens it, and sections
+ * that become due mid-session don't extend the run.
+ */
+let reviewSession = null;
+
+/** localStorage key for the user's daily-review goal (sections/day). */
+const DAILY_GOAL_KEY = 'pianoSrsDailyGoal';
+
+/**
+ * The user's daily goal: a positive integer, or `null` for "Auto" (track
+ * whatever is due today). Read once at startup; mutated by the +/- controls.
+ */
+let dailyGoal = readDailyGoal();
 
 /** Set the small status line in the footer. */
 function setStatus(message) {
@@ -1439,8 +1493,15 @@ function togglePracticeTimer() {
   }
 }
 
-/** Hide the practice panel and clear practice state. */
-function closePracticeView({ silent } = {}) {
+/**
+ * Hide the practice panel and clear practice state.
+ *
+ * @param {{silent?: boolean, keepReviewSession?: boolean}} [opts]
+ *   `keepReviewSession` is set by the guided-review auto-advance so tearing
+ *   down one section doesn't end the run; any other close (user Stop / Esc /
+ *   piece switch) ends a running review and returns to the dashboard.
+ */
+function closePracticeView({ silent, keepReviewSession } = {}) {
   stopPracticeTimer(); // item 18 — stop session timer
   // Item 19 — persist cumulative practice time before clearing state.
   if (practiceState) {
@@ -1448,15 +1509,21 @@ function closePracticeView({ silent } = {}) {
     if (elapsed > 0) {
       const sid = practiceState.sectionId;
       addPracticeTime(sid, elapsed).then((newTotal) => {
-        // Update in-memory section so the sections panel shows new total
-        // without needing a full IDB reload.
+        const now = Date.now();
+        // Update in-memory caches so the sections panel + dashboard reflect
+        // the new total / recency without a full IDB reload.
         const piece = getActivePiece();
         if (piece && Array.isArray(piece.sections)) {
           const sec = piece.sections.find((s) => s.id === sid);
-          if (sec) sec.totalPracticeMs = newTotal;
+          if (sec) { sec.totalPracticeMs = newTotal; sec.lastPracticedAt = now; }
+        }
+        if (queueState && Array.isArray(queueState.sections)) {
+          const qsec = queueState.sections.find((s) => s.id === sid);
+          if (qsec) { qsec.totalPracticeMs = newTotal; qsec.lastPracticedAt = now; }
         }
         renderSectionsPanel();
-        renderStats(); // item 20 — refresh per-piece totals
+        renderStats(); // item 20 — refresh per-piece totals + time tile
+        renderContinuePanel(); // refresh "Continue practicing" recency
       }).catch((err) => console.warn('Failed to persist practice time', err));
     }
   }
@@ -1486,6 +1553,14 @@ function closePracticeView({ silent } = {}) {
   // Re-render the sections panel so the practicing row drops its highlight
   // and the Practice button re-enables.
   renderSectionsPanel();
+
+  // If a guided review was running and this is a real interruption (the user
+  // pressed Stop/Esc while practising — not an internal auto-advance), end the
+  // run and drop back to the dashboard. `wasActive` distinguishes the
+  // selectPiece-internal close (practiceState already null) from a live stop.
+  if (reviewSession && !keepReviewSession && wasActive) {
+    endReviewSession({ completed: false });
+  }
 }
 
 /**
@@ -1537,6 +1612,9 @@ function renderPracticePanel() {
   }
 
   if (els.practiceResetBtn) els.practiceResetBtn.disabled = saving || count <= 0;
+
+  // Guided-review banner (shown only during a "Start daily review" run).
+  updateReviewSessionBar();
 }
 
 /** Find the currently-being-practiced section, or null. */
@@ -1708,6 +1786,15 @@ async function handleRatingClick(quality, label) {
     // Sections-mastered may have just ticked up if the rating bumped the
     // section's interval over the 21-day mastery floor.
     renderStats();
+  }
+
+  // Guided review: once the rating is committed (the section is scheduled for
+  // today), roll on to the next due section automatically.
+  if (reviewSession) {
+    const sec = getActiveSection();
+    if (sec && sec.lastReviewedDate === dateISO) {
+      await advanceReviewSession();
+    }
   }
 }
 
@@ -1914,23 +2001,9 @@ function renderReviewQueue() {
     return;
   }
 
-  // Refresh the piece title map from the live `pieces` array so a newly-
-  // uploaded or just-renamed piece doesn't show as "(unknown piece)".
-  for (const p of pieces) {
-    queueState.pieceTitleById.set(p.id, {
-      id: p.id,
-      title: p.title,
-      pageCount: p.pageCount,
-    });
-  }
-
-  const items = buildReviewQueue({
-    sections: queueState.sections,
-    piecesById: queueState.pieceTitleById,
-    repCountsToday: queueState.countsByDate,
-    todayISO: queueState.dateISO,
-    repGoal: REP_GOAL,
-  });
+  // `currentQueueItems` refreshes the piece-title map from the live `pieces`
+  // array, so a newly-uploaded or renamed piece doesn't show "(unknown piece)".
+  const items = currentQueueItems();
 
   list.innerHTML = '';
   if (items.length === 0) {
@@ -1943,6 +2016,27 @@ function renderReviewQueue() {
   if (countEl) {
     countEl.textContent =
       items.length === 1 ? '1 section' : `${items.length} sections`;
+  }
+
+  // Overdue callout — sections past their scheduled date, surfaced distinctly
+  // from "due today" so a backlog reads as urgent rather than blending in.
+  if (els.reviewQueueOverdue) {
+    const overdue = items.filter((it) => it.daysOff < 0).length;
+    if (overdue > 0) {
+      els.reviewQueueOverdue.hidden = false;
+      els.reviewQueueOverdue.textContent = `⚠ ${overdue} overdue`;
+      els.reviewQueueOverdue.title = `${overdue} section${
+        overdue === 1 ? '' : 's'
+      } past the scheduled review date`;
+    } else {
+      els.reviewQueueOverdue.hidden = true;
+      els.reviewQueueOverdue.textContent = '';
+    }
+  }
+  // Start-review button: enabled whenever there's something to review.
+  if (els.startReviewBtn) {
+    els.startReviewBtn.disabled = queueClickInFlight;
+    els.startReviewBtn.textContent = `▶ Start daily review (${items.length})`;
   }
 
   for (const item of items) {
@@ -2143,6 +2237,8 @@ function renderStats() {
   }
 
   panel.hidden = false;
+  // Stash for the daily-goal controls so they can recompute without a re-walk.
+  lastStatsSummary = summary;
 
   // Today's done-of-due line in the panel header.
   if (els.statsPanelToday) {
@@ -2169,13 +2265,25 @@ function renderStats() {
     els.statsStreakValue.textContent = String(summary.dailyStreak);
   }
   if (els.statsStreakDetail) {
+    // Personal best (longest streak ever) shown alongside the live streak so a
+    // broken streak still displays the high-water mark to chase.
+    let longest = 0;
+    try {
+      longest = computeLongestStreak(statsState.practiceDates);
+    } catch (_) {
+      longest = 0;
+    }
+    const best = longest > 1 ? ` Best: ${longest}.` : '';
     if (summary.dailyStreak === 0) {
       els.statsStreakDetail.textContent =
-        sections.length > 0 ? 'Start a session to begin a streak.' : '';
+        sections.length > 0
+          ? `Start a session to begin a streak.${best}`
+          : '';
     } else if (summary.dailyStreak === 1) {
-      els.statsStreakDetail.textContent = 'Day one — keep it going.';
+      els.statsStreakDetail.textContent = `Day one — keep it going.${best}`;
     } else {
-      els.statsStreakDetail.textContent = `${summary.dailyStreak} days in a row.`;
+      els.statsStreakDetail.textContent =
+        `${summary.dailyStreak} days in a row.${best}`;
     }
   }
 
@@ -2210,6 +2318,34 @@ function renderStats() {
         `${unrated} unrated waiting in the wings.`;
     }
   }
+
+  // Time-invested tile — total practice time across the whole library. Summed
+  // from the cross-library section snapshot (not the lazily-loaded per-piece
+  // caches) so it's accurate even for pieces not opened this session.
+  if (els.statsTimeValue) {
+    let totalMs = 0;
+    let practiced = 0;
+    for (const s of sections) {
+      const ms = s && typeof s.totalPracticeMs === 'number' ? s.totalPracticeMs : 0;
+      if (ms > 0) {
+        totalMs += ms;
+        practiced += 1;
+      }
+    }
+    els.statsTimeValue.textContent =
+      totalMs > 0 ? formatTotalPracticeTime(totalMs) : '0m';
+    if (els.statsTimeDetail) {
+      els.statsTimeDetail.textContent =
+        practiced > 0
+          ? `Across ${practiced} section${practiced === 1 ? '' : 's'}.`
+          : 'Practice to start the clock.';
+    }
+  }
+
+  // Home-dashboard extras: goal ring, recall-maturity bar, due-soon forecast.
+  renderGoalRing(summary);
+  renderMemoryDistribution(sections);
+  renderForecast(sections, todayISO);
 
   // Per-piece retention list.
   if (els.statsPerPiece && els.statsPerPieceList) {
@@ -2264,6 +2400,406 @@ function renderStats() {
         list.appendChild(li);
       }
     }
+  }
+}
+
+// --- Daily goal ring (home dashboard) ------------------------------------
+
+/** Read the persisted daily goal: a positive int, or null for "Auto". */
+function readDailyGoal() {
+  try {
+    const v = localStorage.getItem(DAILY_GOAL_KEY);
+    if (v === null || v === 'auto') return null;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Persist the daily goal (null → "auto"). Best-effort. */
+function writeDailyGoal(goal) {
+  try {
+    localStorage.setItem(DAILY_GOAL_KEY, goal == null ? 'auto' : String(goal));
+  } catch (_) {
+    // localStorage unavailable — the goal just won't persist.
+  }
+}
+
+/**
+ * Effective ring denominator for today: the explicit goal if set, otherwise
+ * "Auto" tracks whatever is due today (floored at 1 so the ring is sensible).
+ */
+function effectiveGoalTarget(summary) {
+  if (dailyGoal != null) return dailyGoal;
+  const due =
+    summary && typeof summary.todayDueCount === 'number'
+      ? summary.todayDueCount
+      : 0;
+  return Math.max(due, 1);
+}
+
+/** Nudge the daily goal up/down. Dropping below 1 reverts to "Auto". */
+function adjustDailyGoal(delta) {
+  const base =
+    dailyGoal != null
+      ? dailyGoal
+      : effectiveGoalTarget(lastStatsSummary || {});
+  let next = base + delta;
+  if (next < 1) next = null; // back to Auto
+  if (next != null && next > 99) next = 99;
+  dailyGoal = next;
+  writeDailyGoal(next);
+  renderStats();
+}
+
+/** Ring circumference (r=20): 2π·20 — matches the CSS stroke-dasharray. */
+const GOAL_RING_CIRCUMFERENCE = 2 * Math.PI * 20;
+
+/** Paint the daily-goal completion ring from today's done / target. */
+function renderGoalRing(summary) {
+  if (!els.statsGoal) return;
+  els.statsGoal.hidden = false;
+  const done =
+    summary && typeof summary.todayDoneCount === 'number'
+      ? summary.todayDoneCount
+      : 0;
+  const target = effectiveGoalTarget(summary);
+  const frac = target > 0 ? Math.min(1, done / target) : 0;
+  const complete = target > 0 && done >= target;
+
+  if (els.statsGoalRingFill) {
+    els.statsGoalRingFill.style.strokeDashoffset = String(
+      GOAL_RING_CIRCUMFERENCE * (1 - frac),
+    );
+    els.statsGoalRingFill.classList.toggle('is-complete', complete);
+  }
+  if (els.statsGoalRingLabel) {
+    els.statsGoalRingLabel.textContent = `${Math.round(frac * 100)}%`;
+  }
+  if (els.statsGoalDone) els.statsGoalDone.textContent = String(done);
+  if (els.statsGoalTarget) els.statsGoalTarget.textContent = String(target);
+  if (els.statsGoalValue) {
+    els.statsGoalValue.textContent =
+      dailyGoal == null ? 'Auto' : String(dailyGoal);
+  }
+}
+
+// --- Recall-maturity distribution (home dashboard) -----------------------
+
+/** Paint the memory-stage distribution bar + legend from the section set. */
+function renderMemoryDistribution(sections) {
+  const wrap = els.statsMemory;
+  if (!wrap) return;
+  let dist;
+  try {
+    dist = memoryStageDistribution(sections);
+  } catch (err) {
+    console.warn('Could not compute memory distribution', err);
+    wrap.hidden = true;
+    return;
+  }
+  if (!dist || dist.total === 0) {
+    wrap.hidden = true;
+    return;
+  }
+  wrap.hidden = false;
+
+  if (els.statsMemoryBar) {
+    els.statsMemoryBar.innerHTML = '';
+    els.statsMemoryBar.setAttribute(
+      'aria-label',
+      'Recall maturity: ' +
+        dist.stages.map((s) => `${s.label} ${s.count}`).join(', '),
+    );
+    for (const s of dist.stages) {
+      if (s.count <= 0) continue;
+      const seg = document.createElement('div');
+      seg.className = 'stats-memory-seg';
+      seg.dataset.stage = String(s.stage);
+      seg.style.flexGrow = String(s.count);
+      seg.title = `${s.label}: ${s.count} section${s.count === 1 ? '' : 's'}`;
+      els.statsMemoryBar.appendChild(seg);
+    }
+  }
+
+  if (els.statsMemoryLegend) {
+    els.statsMemoryLegend.innerHTML = '';
+    for (const s of dist.stages) {
+      const li = document.createElement('li');
+      li.title = s.hint;
+      const sw = document.createElement('span');
+      sw.className = 'stats-memory-swatch';
+      sw.dataset.stage = String(s.stage);
+      li.appendChild(sw);
+      const txt = document.createElement('span');
+      const b = document.createElement('b');
+      b.textContent = String(s.count);
+      txt.appendChild(b);
+      txt.appendChild(document.createTextNode(` ${s.label}`));
+      li.appendChild(txt);
+      els.statsMemoryLegend.appendChild(li);
+    }
+  }
+}
+
+// --- Due-soon forecast (home dashboard) ----------------------------------
+
+/** Days shown in the due-soon forecast strip. */
+const FORECAST_DAYS = 7;
+
+/** Short weekday label ("Mon".."Sun") for a YYYY-MM-DD date (local). */
+function weekdayLabel(dateISO) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateISO);
+  if (!m) return '';
+  const dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dt.getDay()];
+}
+
+/** Paint the due-soon forecast bar strip from the section schedule. */
+function renderForecast(sections, todayISO) {
+  const wrap = els.statsForecast;
+  const host = els.statsForecastBars;
+  if (!wrap || !host) return;
+  let buckets;
+  try {
+    buckets = dueForecast({ sections, todayISO, days: FORECAST_DAYS });
+  } catch (err) {
+    console.warn('Could not compute due forecast', err);
+    wrap.hidden = true;
+    return;
+  }
+  const totalDue = buckets.reduce((sum, b) => sum + b.count, 0);
+  if (totalDue === 0) {
+    // Nothing scheduled in the window — hide rather than show an empty strip.
+    wrap.hidden = true;
+    return;
+  }
+  wrap.hidden = false;
+  const max = Math.max(1, ...buckets.map((b) => b.count));
+
+  host.innerHTML = '';
+  buckets.forEach((b, i) => {
+    const col = document.createElement('div');
+    col.className = 'stats-forecast-col';
+    if (i === 0) col.classList.add('is-today');
+    if (b.count === 0) col.classList.add('is-empty');
+
+    const count = document.createElement('span');
+    count.className = 'stats-forecast-count';
+    count.textContent = b.count > 0 ? String(b.count) : '';
+    col.appendChild(count);
+
+    const track = document.createElement('div');
+    track.className = 'stats-forecast-track';
+    const bar = document.createElement('div');
+    bar.className = 'stats-forecast-bar';
+    // Bars scale to the busiest day; a floor keeps small bars visible.
+    const pct = b.count > 0 ? Math.max(8, Math.round((b.count / max) * 100)) : 0;
+    bar.style.height = b.count > 0 ? `${pct}%` : '3px';
+    track.appendChild(bar);
+    col.appendChild(track);
+
+    const day = document.createElement('span');
+    day.className = 'stats-forecast-day';
+    day.textContent = i === 0 ? 'Today' : weekdayLabel(b.dateISO);
+    col.appendChild(day);
+
+    col.title = `${b.count} section${b.count === 1 ? '' : 's'} due ${
+      i === 0 ? 'today' : `on ${b.dateISO}`
+    }`;
+    host.appendChild(col);
+  });
+}
+
+// --- Continue practicing (home dashboard) --------------------------------
+
+/** How many recently-practiced sections to surface for one-tap resume. */
+const CONTINUE_LIMIT = 4;
+
+/**
+ * Render the "Continue practicing" list — the most recently practiced
+ * sections (by `lastPracticedAt`), each a one-tap resume into practice.
+ * Reads the cross-library section snapshot so it spans every piece.
+ */
+function renderContinuePanel() {
+  const panel = els.continuePanel;
+  const list = els.continueList;
+  if (!panel || !list) return;
+  if (!queueState || !Array.isArray(queueState.sections)) {
+    panel.hidden = true;
+    return;
+  }
+  // Keep the piece-title lookup fresh (renames / new pieces).
+  for (const p of pieces) {
+    queueState.pieceTitleById.set(p.id, { id: p.id, title: p.title });
+  }
+  const recent = queueState.sections
+    .filter(
+      (s) =>
+        s && typeof s.lastPracticedAt === 'number' && s.lastPracticedAt > 0,
+    )
+    .sort((a, b) => b.lastPracticedAt - a.lastPracticedAt)
+    .slice(0, CONTINUE_LIMIT);
+
+  if (recent.length === 0) {
+    panel.hidden = true;
+    list.innerHTML = '';
+    return;
+  }
+  panel.hidden = false;
+  list.innerHTML = '';
+
+  for (const section of recent) {
+    const pieceMeta = queueState.pieceTitleById.get(section.pieceId) || {
+      id: section.pieceId,
+      title: '(unknown piece)',
+    };
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'continue-item';
+    btn.disabled = queueClickInFlight;
+
+    const info = document.createElement('div');
+    info.className = 'continue-item-info';
+    const name = document.createElement('span');
+    name.className = 'continue-item-name';
+    name.textContent = section.name || '(unnamed section)';
+    info.appendChild(name);
+    const meta = document.createElement('span');
+    meta.className = 'continue-item-meta';
+    meta.textContent = pieceMeta.title || '(unknown piece)';
+    info.appendChild(meta);
+    btn.appendChild(info);
+
+    const when = document.createElement('span');
+    when.className = 'continue-item-when';
+    when.textContent = formatRelativeTime(section.lastPracticedAt);
+    btn.appendChild(when);
+
+    btn.addEventListener('click', () =>
+      handleReviewQueueClick({
+        section,
+        piece: { id: section.pieceId, title: pieceMeta.title },
+      }),
+    );
+    li.appendChild(btn);
+    list.appendChild(li);
+  }
+}
+
+/** Human "time ago" for a past epoch-ms timestamp (coarse buckets). */
+function formatRelativeTime(ms) {
+  const diff = Date.now() - ms;
+  if (!Number.isFinite(diff) || diff < 0) return 'just now';
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.floor(hr / 24);
+  if (days < 7) return `${days}d ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `${weeks}w ago`;
+  const months = Math.floor(days / 30);
+  return `${months}mo ago`;
+}
+
+// --- Guided daily review session (home dashboard) ------------------------
+
+/**
+ * Build the current due-today queue items from the live snapshot. Shared by
+ * the queue render, the overdue callout, and the guided-review launcher so
+ * they always agree.
+ */
+function currentQueueItems() {
+  if (!queueState) return [];
+  for (const p of pieces) {
+    queueState.pieceTitleById.set(p.id, {
+      id: p.id,
+      title: p.title,
+      pageCount: p.pageCount,
+    });
+  }
+  return buildReviewQueue({
+    sections: queueState.sections,
+    piecesById: queueState.pieceTitleById,
+    repCountsToday: queueState.countsByDate,
+    todayISO: queueState.dateISO,
+    repGoal: REP_GOAL,
+  });
+}
+
+/**
+ * Start a guided run through everything due today: open the first due
+ * section, and auto-advance to the next as each is rated (or skipped).
+ */
+function startDailyReview() {
+  const items = currentQueueItems();
+  if (items.length === 0) return;
+  reviewSession = { items, index: 0 };
+  setStatus(
+    `Daily review — ${items.length} section${items.length === 1 ? '' : 's'} to go.`,
+  );
+  handleReviewQueueClick(items[reviewSession.index]);
+}
+
+/**
+ * Advance the guided review to the next section. Persists the current
+ * session's time (via closePracticeView, keeping review mode) then opens the
+ * next item — or finishes if we've reached the end of the run.
+ */
+async function advanceReviewSession() {
+  const sess = reviewSession;
+  if (!sess) return;
+  closePracticeView({ silent: true, keepReviewSession: true });
+  sess.index += 1;
+  if (sess.index >= sess.items.length) {
+    endReviewSession({ completed: true });
+    return;
+  }
+  await handleReviewQueueClick(sess.items[sess.index]);
+}
+
+/** End the guided review and return to the dashboard. */
+function endReviewSession({ completed } = {}) {
+  const wasRunning = !!reviewSession;
+  reviewSession = null;
+  if (els.reviewSessionBar) els.reviewSessionBar.hidden = true;
+  if (wasRunning) showDashboard();
+  if (completed) {
+    setStatus('Daily review complete — every due section is done. 🎉');
+  }
+}
+
+/** Return from a piece view to the home dashboard and refresh its panels. */
+function showDashboard() {
+  activePieceId = null;
+  renderPieceList(pieces);
+  if (els.viewerMidi) {
+    els.viewerMidi.hidden = true;
+    els.viewerMidi.classList.remove('is-practicing');
+  }
+  if (els.viewerPlaceholder) els.viewerPlaceholder.hidden = false;
+  renderReviewQueue();
+  renderStats();
+  renderContinuePanel();
+}
+
+/** Paint the guided-review banner inside the practice panel. */
+function updateReviewSessionBar() {
+  const bar = els.reviewSessionBar;
+  if (!bar) return;
+  if (!reviewSession || !practiceState) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  if (els.reviewSessionProgress) {
+    const pos = reviewSession.index + 1;
+    const total = reviewSession.items.length;
+    els.reviewSessionProgress.textContent = `Daily review · ${pos} of ${total}`;
   }
 }
 
@@ -2605,6 +3141,8 @@ async function hydrateFromStorage() {
     await refreshReviewQueue();
     // Hydrate the stats snapshot. Same non-blocking treatment as the queue.
     await refreshStats();
+    // "Continue practicing" reads the same cross-library section snapshot.
+    renderContinuePanel();
     if (queueState && queueState.sections.length > 0) {
       const dueCount = buildReviewQueue({
         sections: queueState.sections,
@@ -2854,6 +3392,20 @@ function init() {
   }
   if (els.practiceTimerPauseBtn) {
     els.practiceTimerPauseBtn.addEventListener('click', togglePracticeTimer);
+  }
+
+  // Home-dashboard wiring: guided review + daily-goal controls.
+  if (els.startReviewBtn) {
+    els.startReviewBtn.addEventListener('click', startDailyReview);
+  }
+  if (els.reviewSessionSkip) {
+    els.reviewSessionSkip.addEventListener('click', () => advanceReviewSession());
+  }
+  if (els.statsGoalDec) {
+    els.statsGoalDec.addEventListener('click', () => adjustDailyGoal(-1));
+  }
+  if (els.statsGoalInc) {
+    els.statsGoalInc.addEventListener('click', () => adjustDailyGoal(1));
   }
 
   // Export/import wiring (item 10).

@@ -1,5 +1,48 @@
 # Progress log
 
+## 2026-06-10 — Items 30–37 (Personal home dashboard)
+
+**Built today**
+
+Eight additions that turn the welcome placeholder into an actionable personal
+home. All read the existing cross-library section snapshot (`queueState.sections`)
+so there's no DB migration; one optional section field (`lastPracticedAt`) was
+added for "Continue practicing".
+
+- **Time-invested tile (30):** a 4th stats tile summing `totalPracticeMs` across the whole library ("6h 30m · Across N sections"). Tiles grid went 3→4 cols (2×2 on mobile).
+- **Due-soon forecast (31):** a 7-day bar strip (`dueForecast` in `srs.js`) of how many sections come due each day; overdue folds into today, today's bar is accented, weekday labels below. Hidden when nothing is scheduled.
+- **Recall-maturity distribution (32):** a segmented bar + legend (`memoryStageDistribution`) counting sections at each memory-fade stage (Watch/Find/Glance/From memory), derived from `repetitions` via the existing `memoryBaselineStage`.
+- **Overdue callout (33):** a distinct "⚠ N overdue" pill on the review-queue header for sections past their due date.
+- **Start daily review (34):** `▶ Start daily review (N)` button → a guided run that opens each due section in turn. A banner ("Daily review · X of N" + Skip) shows in the practice panel; rating a section auto-advances; finishing returns to the dashboard with a completion message. New `reviewSession` state; `closePracticeView` gained a `keepReviewSession` flag so auto-advance doesn't end the run while a user Stop/Esc does.
+- **Continue practicing (35):** a panel of the most recently practiced sections (new `lastPracticedAt`, stamped in `addPracticeTime`) with relative timestamps, for one-tap resume (plain resume, not a guided review).
+- **Daily goal + ring (36):** a settable sections/day goal (localStorage `pianoSrsDailyGoal`, "Auto" tracks the due count) shown as an SVG completion ring filling from today's done/target, with −/+ controls.
+- **Longest-streak record (37):** personal-best streak (`computeLongestStreak`) shown as "Best: N." alongside the live streak.
+
+**Files changed**
+
+- `srs.js` — added `computeLongestStreak`, `dueForecast`, `memoryStageDistribution` (all pure) + exports.
+- `db.js` — `sectionToRecord` passthrough for `lastPracticedAt`; `addPracticeTime` now stamps it on session close.
+- `index.html` — goal-ring row, time tile, recall-maturity + forecast sections, queue start-button + overdue pill, continue panel, review-session banner. Footer → v0.22.0.
+- `styles.css` — styles for all the above (theme-aware via existing custom properties); tiles grid 3→4 (2×2 mobile).
+- `app.js` — element refs; `renderGoalRing` / `renderMemoryDistribution` / `renderForecast` / `renderContinuePanel`; daily-goal state + persistence; guided-review session (`startDailyReview` / `advanceReviewSession` / `endReviewSession` / `showDashboard` / `updateReviewSessionBar`); time-tile + longest-streak in `renderStats`; overdue + start-button in `renderReviewQueue`; auto-advance hook in `handleRatingClick`; wiring in `init`. `APP_VERSION` → 0.22.0.
+- `tests/home.test.mjs` — new: covers the three pure helpers (streak, forecast, distribution).
+
+**Verification**
+
+- `node --check` on all browser scripts; full `tests/*.mjs` suite green (incl. new `home.test.mjs`).
+- In-browser (preview, seeded demo data): all 8 panels render in light + dark and at mobile width; guided review walks 1→2→3→done and returns to the dashboard; goal +/- persists and reverts to Auto below 1; continue-resume opens practice without a review session. No console errors. Demo data reverted afterward.
+
+**Design decisions**
+
+- **Forecast folds overdue into the "today" bar** so day 0 reads as "what's on my plate now"; the separate overdue pill carries the urgency nuance. The forecast counts scheduled load by date and does not subtract today's completions, so it's a stable picture of the schedule.
+- **Guided review captures the due-list at start and walks it by index**, so completing/skipping never re-opens a section and sections that become due mid-run don't extend it. Auto-advance persists each section's practice time via `closePracticeView({ keepReviewSession: true })`.
+- **`lastPracticedAt` over deriving from rep logs:** stamping the section means "Continue practicing" reflects any session (even one without a clean run), and it pairs naturally with the existing `totalPracticeMs` write.
+- **Goal "Auto" default** tracks the due count so the ring is meaningful before the user sets anything; an explicit goal persists and dropping below 1 reverts to Auto.
+
+**Next suggested step**
+
+- Make the forecast window toggleable (7/14 days), or let clicking a future forecast bar preview which sections fall on that day.
+
 ## 2026-05-08 — Item 20 (Cumulative time display)
 
 **Built today**
