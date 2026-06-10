@@ -28,6 +28,11 @@ const LOOKAHEAD_BEATS = 4;         // how many beats are visible above the hit l
 const PLAYHEAD_EASING = 0.22;      // per-frame lerp toward the active step
 const FLASH_MS = 220;              // key flash duration
 
+// ---- Memory mode (cue fading) -------------------------------------------
+const GLANCE_BEATS = 0.75;         // stage 2: notes only appear this close to the line
+const ASSIST_THRESHOLD = 3;        // consecutive run-resets before easing one stage
+const REVEAL_MS = 700;             // how long the corrective "you missed this" flash lasts
+
 // White-key pitch classes (C D E F G A B).
 const WHITE_PC = { 0: 1, 2: 1, 4: 1, 5: 1, 7: 1, 9: 1, 11: 1 };
 const isWhite = (midi) => !!WHITE_PC[((midi % 12) + 12) % 12];
@@ -46,6 +51,7 @@ function createPlayer(host, opts = {}) {
   const onRepComplete = opts.onRepComplete || (() => {});
   const onMistake = opts.onMistake || (() => {});
   const onProgress = opts.onProgress || (() => {});
+  const onStageChange = opts.onStageChange || (() => {});
 
   // ---- Build DOM ----
   host.innerHTML = '';
@@ -93,7 +99,25 @@ function createPlayer(host, opts = {}) {
   keysToggle.textContent = '⌨ Computer keys: off';
   keysToggle.addEventListener('click', () => setComputerKeys(!computerKeysOn));
 
-  controls.append(midiStatus, handGroup, listenBtn, restartBtn, keysToggle);
+  // Hold-to-reveal: temporarily forces full visuals while held.
+  const peekBtn = document.createElement('button');
+  peekBtn.type = 'button';
+  peekBtn.className = 'btn btn-sm player-peek-btn';
+  peekBtn.textContent = '👁 Peek';
+  peekBtn.title = 'Hold to reveal the notes';
+  const peekOn = (e) => { if (e) e.preventDefault(); setPeek(true); };
+  const peekOff = () => setPeek(false);
+  peekBtn.addEventListener('pointerdown', peekOn);
+  peekBtn.addEventListener('pointerup', peekOff);
+  peekBtn.addEventListener('pointerleave', peekOff);
+  peekBtn.addEventListener('pointercancel', peekOff);
+
+  // Memory-level chip (Watch → Find → Glance → From memory).
+  const memoryChip = document.createElement('span');
+  memoryChip.className = 'player-memory';
+  memoryChip.setAttribute('aria-live', 'polite');
+
+  controls.append(midiStatus, memoryChip, handGroup, listenBtn, restartBtn, peekBtn, keysToggle);
 
   const feedback = document.createElement('p');
   feedback.className = 'player-feedback';
@@ -125,6 +149,14 @@ function createPlayer(host, opts = {}) {
   let stepIndex = 0;
   let runStarted = false;
   let cleanRunCount = 0;      // reps completed this session (display only)
+
+  // ---- Memory mode (cue fading) ----
+  let baseStage = 0;          // maturity baseline (set by app from SRS state)
+  let runIndex = 0;           // today's completed clean runs (set by app)
+  let assist = 0;             // session help notches from the auto-assist
+  let consecutiveResets = 0;  // run-resets in a row without a clean run
+  let peeking = false;        // hold-to-reveal active
+  let lastStage = -1;         // last notified effective stage
 
   let keyRange = { lo: 60, hi: 72 };
   let whiteMidis = [];
@@ -181,13 +213,68 @@ function createPlayer(host, opts = {}) {
   }
 
   // ---- Load a section ----
-  function load(piece, sec) {
+  function load(piece, sec, loadOpts = {}) {
     section = sec;
     ticksPerQuarter = piece.ticksPerQuarter || 480;
     allSectionNotes = notesInSection(piece.notes || [], sec);
+    // Reset memory-mode session state; baseStage comes from the section's
+    // SRS maturity (app passes it in).
+    baseStage = typeof loadOpts.baseStage === 'number' ? loadOpts.baseStage : 0;
+    runIndex = typeof loadOpts.runIndex === 'number' ? loadOpts.runIndex : 0;
+    assist = 0;
+    consecutiveResets = 0;
+    peeking = false;
     computeHands(allSectionNotes);
     syncHandButtons();
     rebuild();
+    notifyStage();
+  }
+
+  // ---- Memory mode: effective fade stage ----
+  // currentStage() reuses the pure srs.js helper effectiveMemoryStage(); a
+  // peek forces full visuals (stage 0).
+  function currentStage() {
+    if (peeking) return 0;
+    return effectiveMemoryStage(baseStage, runIndex, assist);
+  }
+
+  function notifyStage() {
+    const stage = currentStage();
+    const info = describeMemoryStage(stage);
+    // ●●○○ dots + label.
+    const dots = Array.from({ length: info.total + 1 }, (_, i) =>
+      i <= stage ? '●' : '○',
+    ).join('');
+    memoryChip.textContent = `${dots} ${peeking ? 'Peek' : info.label}`;
+    memoryChip.title = info.hint;
+    memoryChip.dataset.stage = String(stage);
+    if (stage !== lastStage) {
+      lastStage = stage;
+      onStageChange(info);
+    }
+    refreshKeyClasses();
+  }
+
+  function setMemoryBase(n) {
+    baseStage = typeof n === 'number' ? n : 0;
+    notifyStage();
+  }
+
+  function setRunIndex(n) {
+    runIndex = typeof n === 'number' && n > 0 ? n : 0;
+    notifyStage();
+  }
+
+  function setPeek(on) {
+    if (peeking === !!on) return;
+    peeking = !!on;
+    peekBtn.classList.toggle('is-active', peeking);
+    notifyStage();
+    draw();
+  }
+
+  function getStage() {
+    return currentStage();
   }
 
   function setHand(h) {
@@ -300,14 +387,18 @@ function createPlayer(host, opts = {}) {
 
   function refreshKeyClasses() {
     const cur = steps[stepIndex];
+    // Key guides only at stage 0 (Watch). Higher stages hide them so you must
+    // find the keys / play from memory; correct/wrong flashes still fire.
+    const showGuides = currentStage() === 0;
     for (const [midi, el] of keyEls) {
       el.classList.toggle('is-held', heldPitches.has(midi));
-      const expected = !!cur && cur.need.has(midi) && !cur.got.has(midi);
+      const expected =
+        showGuides && !!cur && cur.need.has(midi) && !cur.got.has(midi);
       el.classList.toggle('is-expected', expected);
     }
   }
 
-  function flashKey(midi, cls) {
+  function flashKey(midi, cls, ms = FLASH_MS) {
     const el = keyEls.get(midi);
     if (!el) return;
     el.classList.add(cls);
@@ -315,7 +406,7 @@ function createPlayer(host, opts = {}) {
     if (prev) clearTimeout(prev);
     flashTimers.set(
       `${midi}:${cls}`,
-      setTimeout(() => el.classList.remove(cls), FLASH_MS),
+      setTimeout(() => el.classList.remove(cls), ms),
     );
   }
 
@@ -349,6 +440,7 @@ function createPlayer(host, opts = {}) {
     if (stepIndex >= steps.length) {
       // Clean run complete.
       cleanRunCount++;
+      consecutiveResets = 0; // got all the way through → no longer struggling
       feedback.textContent = '✓ Clean run!';
       feedback.classList.remove('is-error');
       feedback.classList.add('is-success');
@@ -366,8 +458,25 @@ function createPlayer(host, opts = {}) {
 
   function handleMistake(midi) {
     const wasAt = stepIndex;
+    const stageNow = currentStage();
+    // Corrective feedback when cues were hidden: briefly reveal the note(s) you
+    // should have played. Errorful retrieval + immediate correction is strong
+    // for learning — and it stops a blind run from feeling like a guessing wall.
+    const cur = steps[wasAt];
+    if (stageNow >= 2 && cur) {
+      for (const p of cur.need) flashKey(p, 'is-reveal', REVEAL_MS);
+    }
     restartRun(false);
-    feedback.textContent = '✗ Wrong note — run reset. Start from the top.';
+    // Auto-assist: too many resets in a row → ease one stage (more help).
+    consecutiveResets++;
+    if (consecutiveResets >= ASSIST_THRESHOLD && currentStage() > 0) {
+      assist++;
+      consecutiveResets = 0;
+      notifyStage();
+      feedback.textContent = '✗ Wrong note — showing a little more help. Keep going!';
+    } else {
+      feedback.textContent = '✗ Wrong note — run reset. Start from the top.';
+    }
     feedback.classList.add('is-error');
     feedback.classList.remove('is-success');
     onMistake({ midi, atStep: wasAt });
@@ -594,9 +703,24 @@ function createPlayer(host, opts = {}) {
     ctx2d.lineTo(cssWidth, hitY);
     ctx2d.stroke();
 
+    // Memory mode gates how much of the falling-note stream is drawn.
+    const stage = currentStage();
+    if (stage >= 3) {
+      // From memory — blank canvas (post-press key flashes still show).
+      ctx2d.fillStyle = 'rgba(148,163,184,0.5)';
+      ctx2d.font = '13px system-ui, sans-serif';
+      ctx2d.textAlign = 'center';
+      ctx2d.fillText('Playing from memory', cssWidth / 2, NOTE_AREA_HEIGHT / 2);
+      ctx2d.textAlign = 'start';
+      return;
+    }
+    // Stage 2 (Glance): only reveal notes once they're close to the hit line.
+    const glanceTicks = GLANCE_BEATS * ticksPerQuarter;
+
     const curTick = steps[stepIndex] ? steps[stepIndex].tick : playheadTick;
 
     for (const n of activeNotes) {
+      if (stage >= 2 && n.startTick - playheadTick > glanceTicks) continue;
       const yOnset = hitY - (n.startTick - playheadTick) * pxPerTick;
       const h = Math.max(6, (n.endTick - n.startTick) * pxPerTick);
       const yTop = yOnset - h;
@@ -651,6 +775,7 @@ function createPlayer(host, opts = {}) {
     window.addEventListener('keyup', onComputerKeyUp, true);
     window.addEventListener('resize', onResize);
     resize();
+    notifyStage();
     refreshKeyClasses();
     rafId = requestAnimationFrame(frame);
   }
@@ -692,6 +817,10 @@ function createPlayer(host, opts = {}) {
     getCleanRunCount,
     resetCleanRunCount,
     setComputerKeys: (on) => setComputerKeys(on),
+    setMemoryBase,
+    setRunIndex,
+    setPeek,
+    getStage,
   };
 }
 

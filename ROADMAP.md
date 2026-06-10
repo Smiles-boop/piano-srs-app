@@ -36,3 +36,12 @@ The practice surface moved from PDF sheet music + self-reported reps to **MIDI +
 - [x] 23. Synthesia player (`player.js`): falling-note canvas + on-screen keyboard, Web MIDI / on-screen / computer-keyboard input, and a Web-Audio synth "Listen" preview.
 - [x] 24. Wait-mode, strict clean-run engine: play the correct next note(s) to advance; one wrong note restarts the attempt; 10 clean runs completes the review and feeds the existing SM-2 rating flow.
 - [x] 25. Hand toggle (Both / Right / Left), "Re-split" sections, and updated docs.
+
+## v0.21 — Memory mode (cue fading)
+
+Reading falling notes is recognition, not recall, so the visual cues now **fade automatically** to force retrieval — built into the core review loop, not an optional toggle.
+
+- [x] 26. Pure stage helpers in `srs.js` (`memoryBaselineStage`, `effectiveMemoryStage`, `describeMemoryStage`), unit-tested (`tests/memory.test.mjs`). Stage derives from the existing `repetitions` field — no DB migration.
+- [x] 27. Four fade stages in `player.js` — Watch → Find → Glance → From memory — gating the falling notes and key guides; post-press correct/wrong feedback stays at every stage.
+- [x] 28. Maturity baseline + within-session ramp (the runs that complete a review are the most from-memory), driven from SRS state in `app.js`.
+- [x] 29. Auto-assist (eases a stage after repeated resets), corrective "you missed this" reveal when blind, and hold-to-reveal **Peek**.

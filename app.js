@@ -79,6 +79,7 @@ const els = {
   status: document.getElementById('app-status'),
   addPieceBtn: document.getElementById('add-piece-btn'),
   fileInput: document.getElementById('midi-file-input'),
+  loadSampleBtn: document.getElementById('load-sample-btn'),
   pieceList: document.getElementById('piece-list'),
   viewerPlaceholder: document.getElementById('viewer-placeholder'),
   viewerMidi: document.getElementById('viewer-midi'),
@@ -600,6 +601,35 @@ async function handleMidiFile(file) {
     console.error('Failed to load MIDI', err);
     setStatus(`Failed to load MIDI: ${err.message || err}`);
   }
+}
+
+/**
+ * One-click loader for the bundled demo piece (`samples/twinkle.mid`). Fetched
+ * at runtime and run through the normal import path. If a Twinkle piece is
+ * already in the library, just select it instead of importing a duplicate.
+ */
+async function handleLoadSample() {
+  const existing = pieces.find((p) => p.title === 'Twinkle Twinkle');
+  if (existing) {
+    selectPiece(existing.id);
+    return;
+  }
+  setStatus('Loading sample piece…');
+  let buf;
+  try {
+    const res = await fetch('samples/twinkle.mid');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    buf = await res.arrayBuffer();
+  } catch (err) {
+    console.warn('Could not fetch sample', err);
+    setStatus(
+      'Could not load the sample — open the app over http://localhost (not by double-clicking index.html).',
+    );
+    return;
+  }
+  await handleMidiFile(
+    new File([buf], 'Twinkle Twinkle.mid', { type: 'audio/midi' }),
+  );
 }
 
 // --- Selection -----------------------------------------------------------
@@ -1184,6 +1214,8 @@ async function openPracticeView(sectionId) {
     ) {
       practiceState.count = fresh;
       repCountsToday.set(sectionId, fresh);
+      // Continue the within-session memory ramp from the reconciled count.
+      if (player) player.setRunIndex(fresh);
       // If the user crossed the goal in another tab / earlier today, the
       // rating prompt will show automatically inside renderPracticePanel
       // (when goal-met AND lastReviewedDate !== today). We deliberately do
@@ -1249,10 +1281,21 @@ function mountPlayer(piece, section) {
       onMistake: () => {
         setStatus('Wrong note — run reset. Play the section again from the top.');
       },
+      onStageChange: (info) => {
+        // Memory mode surfaces its level in the player's own chip; mirror big
+        // transitions to the status line so the user notices the shift.
+        if (info && info.stage >= MEMORY_MAX_STAGE) {
+          setStatus('From memory now — no on-screen guides. You’ve got this.');
+        }
+      },
     });
   }
   player.resetCleanRunCount();
-  player.load(piece, section);
+  // Memory mode: maturity sets the starting fade stage; runIndex continues the
+  // within-session ramp from today's already-completed clean runs.
+  const baseStage = memoryBaselineStage(section);
+  const runIndex = practiceState ? practiceState.count : 0;
+  player.load(piece, section, { baseStage, runIndex });
   player.start();
 }
 
@@ -1285,6 +1328,8 @@ async function recordCleanRun() {
     }
     setQueueRepCount(sectionId, persisted.count);
     noteRepLogActivity(dateISO);
+    // Advance the within-session memory-fade ramp to match the new count.
+    if (player) player.setRunIndex(persisted.count);
     if (isRepGoalMet(persisted.count)) {
       setStatus(`All ${persisted.count} clean runs done — pick a rating to schedule the next review.`);
     } else {
@@ -1751,7 +1796,7 @@ async function handleResetReps() {
   practiceState.saving = true;
   practiceState.count = 0;
   repCountsToday.set(sectionId, 0);
-  if (player) { player.resetCleanRunCount(); player.restartRun(true); }
+  if (player) { player.resetCleanRunCount(); player.setRunIndex(0); player.restartRun(true); }
   renderPracticePanel();
 
   try {
@@ -2772,6 +2817,10 @@ function init() {
       input.value = ''; // reset so picking the same file again retriggers
       await handleMidiFile(file);
     });
+  }
+
+  if (els.loadSampleBtn) {
+    els.loadSampleBtn.addEventListener('click', () => handleLoadSample());
   }
 
   if (els.resplitBtn) {

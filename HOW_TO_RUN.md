@@ -30,11 +30,13 @@ Double-clicking `index.html` also works, but browsers restrict the Web MIDI API 
 4. **Clean runs.** Play the highlighted notes. Reach the end with **zero wrong notes** for one clean run — a wrong note restarts the attempt. Ten clean runs completes the review.
 5. **Rate.** The *Again / Hard / Good / Easy* prompt appears; each shows the next-review date it'll produce. SM-2 schedules the section.
 
+**Memory mode is built into the loop.** The on-screen guides fade automatically — *Watch → Find → Glance → From memory* — as a section matures (across spaced reviews) and across the 10 runs of each session, so you're trained to recall rather than read. The level chip in the practice panel shows where you are; **👁 Peek** (hold) reveals the notes if you're stuck, and the level eases itself if you keep resetting. A failed review ("Again") brings the full guides back.
+
 There's a ready-made demo file at `samples/twinkle.mid` (regenerate with `node samples/make-twinkle.mjs`).
 
 ## Practice-panel shortcuts
 
-`L` listen (synth preview) · `R` restart run · `1`–`4` rate · `Esc` stop · `M` metronome · `T` pause timer · `D` dark mode. (The opt-in *Computer keys* mode owns the letter keys while it's on.)
+`L` listen (synth preview) · `R` restart run · `1`–`4` rate · `Esc` stop · `M` metronome · `T` pause timer · `D` dark mode · hold **👁 Peek** to reveal notes. (The opt-in *Computer keys* mode owns the letter keys while it's on.)
 
 ## Where your data lives
 

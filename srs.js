@@ -632,6 +632,80 @@ function isISODate(s) {
   return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
 
+// --- Memory mode: cue fading driven by SRS maturity ----------------------
+//
+// Memory is built by RETRIEVAL, not by reading cues. So the practice loop
+// progressively hides the Synthesia cues, forcing the user to play from
+// memory. The fade is a small ordinal "stage" (0..MEMORY_MAX_STAGE):
+//
+//   0 Watch       — full falling notes + key highlights (acquisition)
+//   1 Find        — full falling notes, NO key highlights (find the key)
+//   2 Glance      — notes only appear close to the hit line (shrunk look-ahead)
+//   3 From memory — blank; play from recall (post-press feedback still shows)
+//
+// All pure — these take an explicit `repetitions` / `runIndex` / `assist` so
+// they're deterministic and unit-testable, with no DOM / IDB / clock reads.
+
+/** Top of the fade ramp — "From memory". */
+const MEMORY_MAX_STAGE = 3;
+
+function clampStage(n) {
+  const v = Math.floor(Number(n));
+  if (!Number.isFinite(v) || v < 0) return 0;
+  if (v > MEMORY_MAX_STAGE) return MEMORY_MAX_STAGE;
+  return v;
+}
+
+/**
+ * Baseline fade stage for a section, from how mature it is in the schedule.
+ * Derived from `repetitions` (no new persisted field): a brand-new or lapsed
+ * section starts at Watch; after ~3 successful spaced reviews it starts From
+ * memory. Pure.
+ *
+ * @param {object|null} section
+ */
+function memoryBaselineStage(section) {
+  const reps = srsStateForSection(section).repetitions;
+  return clampStage(reps);
+}
+
+/**
+ * Effective fade stage for the run the user is currently attempting.
+ * Combines the maturity baseline with a within-session ramp — every 3 clean
+ * runs tightens by one stage, so the runs that COMPLETE a review are the most
+ * from-memory — minus any `assist` notches granted after repeated failures.
+ * Pure.
+ *
+ * @param {number} base      memoryBaselineStage()
+ * @param {number} runIndex  clean runs already completed today (0..goal-1)
+ * @param {number} assist    session help notches (>=0) from the auto-assist
+ */
+function effectiveMemoryStage(base, runIndex, assist = 0) {
+  const b = clampStage(base);
+  const idx = Number.isFinite(runIndex) && runIndex > 0 ? Math.floor(runIndex) : 0;
+  const a = Number.isFinite(assist) && assist > 0 ? Math.floor(assist) : 0;
+  // Cap the maturity + within-session ramp at the max FIRST, then let each
+  // assist notch visibly pull it back toward more help (floor 0). Otherwise a
+  // section whose base+ramp overshoots the cap would ignore the first notches.
+  const ramped = clampStage(b + Math.floor(idx / 3));
+  return clampStage(ramped - a);
+}
+
+/**
+ * Human-readable descriptor for a fade stage — drives the practice-panel
+ * "memory level" chip. Pure.
+ */
+function describeMemoryStage(stage) {
+  const s = clampStage(stage);
+  const table = [
+    { key: 'watch', label: 'Watch', hint: 'Full notes + key guides' },
+    { key: 'find', label: 'Find', hint: 'Notes shown — find the keys yourself' },
+    { key: 'glance', label: 'Glance', hint: 'Notes appear only at the last moment' },
+    { key: 'memory', label: 'From memory', hint: 'No guides — play from recall' },
+  ];
+  return { stage: s, total: MEMORY_MAX_STAGE, ...table[s] };
+}
+
 // ---- Node export shim (browser-safe) ------------------------------------
 // In the browser these are plain globals (classic <script>). Under Node the
 // object-literal assignment is picked up by the CJS→ESM interop so the test
@@ -658,5 +732,9 @@ if (typeof module !== 'undefined' && module.exports) {
     isSectionMastered,
     computeDailyStreak,
     summariseProgress,
+    MEMORY_MAX_STAGE,
+    memoryBaselineStage,
+    effectiveMemoryStage,
+    describeMemoryStage,
   };
 }

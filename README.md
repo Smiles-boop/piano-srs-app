@@ -7,6 +7,7 @@ A spaced-repetition review app for piano practice — think Anki, but for pieces
 - **Load a MIDI file.** It's stored locally (IndexedDB) and split into phrase-based sections automatically — no manual page/measure entry.
 - **Practice in wait mode.** The score waits for you; you advance by pressing the correct next note(s) at your own pace. Rhythm isn't graded — note correctness is.
 - **Clean runs.** One wrong note restarts the current attempt. Ten flawless run-throughs of a section completes its review; then you rate it (Again / Hard / Good / Easy) and SM-2 schedules the next due date.
+- **Memory mode (built in).** Because reading falling notes is recognition, not recall, the visual cues **fade automatically** as a section matures and within each session: **Watch** (full notes + key guides) → **Find** (notes, no key guides) → **Glance** (notes appear only at the last moment) → **From memory** (blank — play from recall). A brand-new section starts at Watch and the last runs of the session push you toward memory; after a few spaced reviews it starts blind. Rating "Again" brings the guides back. An auto-assist eases the level if you keep stalling, and **👁 Peek** reveals the notes while held.
 - **Daily queue + stats.** On open, every section that's due today surfaces in one list, with streak / mastery / retention stats — exactly as before; only the *source* of a rep changed (a detected clean run instead of a button click).
 
 ## How to open

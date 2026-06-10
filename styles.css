@@ -393,6 +393,10 @@ body {
   text-align: center;
 }
 
+.load-sample-btn {
+  margin-top: 12px;
+}
+
 .viewer-placeholder-welcome h2 {
   margin: 0 0 16px 0;
   font-size: 22px;
@@ -2040,9 +2044,33 @@ kbd {
 }
 
 .player-keys-toggle.is-active,
-.player-listen-btn.is-active {
+.player-listen-btn.is-active,
+.player-peek-btn.is-active {
   background: var(--accent);
   color: var(--accent-contrast);
+}
+
+/* Memory-level chip (Watch → Find → Glance → From memory) */
+.player-memory {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+/* Brighter as the section gets closer to "From memory". */
+.player-memory[data-stage="2"] { color: var(--text); border-color: var(--accent); }
+.player-memory[data-stage="3"] {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .player-feedback {
@@ -2129,6 +2157,10 @@ kbd {
 .player-key-black.is-correct { background: #059669; }
 .player-key-white.is-wrong { background: #fca5a5; }
 .player-key-black.is-wrong { background: #dc2626; }
+/* Corrective "you should have played this" reveal (amber), shown after a wrong
+   note when cues were hidden. */
+.player-key-white.is-reveal { background: #fbbf24; box-shadow: inset 0 0 0 2px #d97706; }
+.player-key-black.is-reveal { background: #d97706; }
 
 @media (max-width: 640px) {
   .player-controls { gap: 6px; }
