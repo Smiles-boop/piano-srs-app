@@ -45,3 +45,20 @@ Reading falling notes is recognition, not recall, so the visual cues now **fade 
 - [x] 27. Four fade stages in `player.js` — Watch → Find → Glance → From memory — gating the falling notes and key guides; post-press correct/wrong feedback stays at every stage.
 - [x] 28. Maturity baseline + within-session ramp (the runs that complete a review are the most from-memory), driven from SRS state in `app.js`.
 - [x] 29. Auto-assist (eases a stage after repeated resets), corrective "you missed this" reveal when blind, and hold-to-reveal **Peek**.
+
+## v0.22 — Personal home dashboard
+
+The welcome placeholder (shown before a piece is opened) grows from a stats
+panel + due-today list into a personal home: a forward-looking, actionable
+dashboard. New pure helpers in `srs.js` (`dueForecast`, `computeLongestStreak`,
+`memoryStageDistribution`) keep the maths unit-tested; everything reuses the
+existing cross-library section snapshot, so there's no DB migration.
+
+- [x] 30. Total-practice-time tile — sums `totalPracticeMs` across the whole library into a "Time invested" tile.
+- [x] 31. Due-soon forecast — a 7-day bar strip of how many sections come due each day (overdue folds into today).
+- [x] 32. Recall-maturity distribution — counts sections at each memory-fade stage (Watch / Find / Glance / From memory) as a segmented bar + legend.
+- [x] 33. Overdue callout — sections past their due date surfaced as a distinct urgency pill on the queue.
+- [x] 34. Start daily review — one button walks every due section in sequence (auto-advance on rating, Skip, completion → dashboard).
+- [x] 35. Continue practicing — recently-practiced sections (new `lastPracticedAt` field) for one-tap resume.
+- [x] 36. Daily goal + completion ring — a settable sections/day goal (localStorage, "Auto" tracks due count) with an SVG progress ring.
+- [x] 37. Longest-streak record — personal-best streak shown alongside the live streak.

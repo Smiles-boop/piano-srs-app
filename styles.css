@@ -468,7 +468,7 @@ body {
   margin: 0 0 4px 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 10px;
 }
 
@@ -1644,6 +1644,415 @@ kbd {
   border: 0;
 }
 
+/* --- Daily goal ring (home dashboard) ------------------------------------ */
+.stats-goal {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 4px 0 14px 0;
+  padding: 12px 14px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.stats-goal[hidden] {
+  display: none;
+}
+
+.stats-goal-ring {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  flex: none;
+}
+
+.stats-goal-ring-svg {
+  width: 56px;
+  height: 56px;
+  transform: rotate(-90deg); /* start the arc at 12 o'clock */
+}
+
+.stats-goal-ring-track {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 5;
+}
+
+.stats-goal-ring-fill {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 5;
+  stroke-linecap: round;
+  /* circumference = 2πr = 2π·20 ≈ 125.66; JS sets stroke-dashoffset. */
+  stroke-dasharray: 125.66;
+  stroke-dashoffset: 125.66;
+  transition: stroke-dashoffset 0.35s ease;
+}
+
+.stats-goal-ring-fill.is-complete {
+  stroke: var(--complete-fill);
+}
+
+.stats-goal-ring-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.stats-goal-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.stats-goal-count {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.stats-goal-count b {
+  font-size: 16px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-goal-sep {
+  color: var(--text-muted);
+  margin: 0 1px;
+}
+
+.stats-goal-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.stats-goal-edit-label {
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.stats-goal-adj {
+  min-width: 26px;
+  padding: 2px 8px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.stats-goal-value {
+  min-width: 40px;
+  text-align: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* --- Recall maturity distribution (home dashboard) ----------------------- */
+.stats-memory {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.stats-memory[hidden] {
+  display: none;
+}
+
+.stats-memory-title,
+.stats-forecast-title {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.stats-memory-bar {
+  display: flex;
+  height: 14px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-alt);
+}
+
+.stats-memory-seg {
+  background: var(--accent);
+  min-width: 0;
+  transition: flex-grow 0.3s ease;
+}
+
+/* Maturity ramp: faintest = Watch (least internalised) → solid = From memory. */
+.stats-memory-seg[data-stage="0"] { opacity: 0.3; }
+.stats-memory-seg[data-stage="1"] { opacity: 0.52; }
+.stats-memory-seg[data-stage="2"] { opacity: 0.74; }
+.stats-memory-seg[data-stage="3"] { opacity: 1; }
+
+.stats-memory-legend {
+  list-style: none;
+  margin: 8px 0 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.stats-memory-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.stats-memory-legend .stats-memory-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--accent);
+  flex: none;
+}
+
+.stats-memory-legend .stats-memory-swatch[data-stage="0"] { opacity: 0.3; }
+.stats-memory-legend .stats-memory-swatch[data-stage="1"] { opacity: 0.52; }
+.stats-memory-legend .stats-memory-swatch[data-stage="2"] { opacity: 0.74; }
+.stats-memory-legend .stats-memory-swatch[data-stage="3"] { opacity: 1; }
+
+.stats-memory-legend b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Due-soon forecast (home dashboard) ---------------------------------- */
+.stats-forecast {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.stats-forecast[hidden] {
+  display: none;
+}
+
+.stats-forecast-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 76px;
+}
+
+.stats-forecast-col {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 100%;
+  justify-content: flex-end;
+}
+
+.stats-forecast-count {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+.stats-forecast-track {
+  width: 100%;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: flex-end;
+}
+
+.stats-forecast-bar {
+  width: 100%;
+  min-height: 3px;
+  background: var(--accent);
+  opacity: 0.5;
+  border-radius: 3px 3px 0 0;
+  transition: height 0.3s ease;
+}
+
+.stats-forecast-col.is-today .stats-forecast-bar {
+  opacity: 1;
+}
+
+.stats-forecast-col.is-empty .stats-forecast-bar {
+  background: var(--border);
+  opacity: 0.6;
+}
+
+.stats-forecast-day {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.stats-forecast-col.is-today .stats-forecast-day {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* --- Review queue actions: start + overdue (home dashboard) -------------- */
+.review-queue-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 8px 0 10px 0;
+}
+
+.start-review-btn {
+  font-weight: 600;
+}
+
+.review-queue-overdue {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 999px;
+  background: var(--overdue-bg);
+  color: var(--overdue-text);
+  border: 1px solid var(--overdue-border);
+}
+
+.review-queue-overdue[hidden] {
+  display: none;
+}
+
+/* --- Continue practicing (home dashboard) -------------------------------- */
+.continue-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 22px 16px 22px;
+  box-shadow: var(--shadow);
+}
+
+.continue-panel[hidden] {
+  display: none;
+}
+
+.continue-header {
+  margin-bottom: 10px;
+}
+
+.continue-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.continue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.continue-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.continue-item:hover,
+.continue-item:focus-visible {
+  border-color: var(--accent);
+  background: var(--practice-highlight);
+}
+
+.continue-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.continue-item-name {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.continue-item-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.continue-item-when {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* --- Guided review session bar (practice panel) -------------------------- */
+.review-session-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px 0;
+  padding: 8px 14px;
+  background: var(--rating-prompt-bg);
+  border: 1px solid var(--rating-prompt-border);
+  border-radius: var(--radius);
+}
+
+.review-session-bar[hidden] {
+  display: none;
+}
+
+.review-session-progress {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- Mobile-friendly layout (roadmap item 11c) ---
  * On narrow viewports the sidebar becomes a slide-out drawer overlaying the
  * viewer, toggled by a hamburger button in the header. The drawer is hidden
@@ -1931,9 +2340,9 @@ kbd {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  /* Stats tiles stack */
+  /* Stats tiles: 2×2 grid on mobile (4 tiles) instead of a tall stack */
   .stats-tiles {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr 1fr;
   }
   .stats-per-piece-row {
     grid-template-columns: 1fr 60px 50px 40px;

@@ -378,6 +378,60 @@ function buildReviewQueue({
 }
 
 /**
+ * Pure: project how many sections come due on each of the next `days`
+ * calendar days, starting today. Turns the single "due today" number into a
+ * forward-looking workload strip ("here's my week").
+ *
+ * Each bucket is `{ dateISO, daysFromToday, count }` for daysFromToday in
+ * 0..days-1. A section contributes to exactly one bucket, chosen by its
+ * `nextDue`:
+ *   - overdue sections (nextDue before today) fold into bucket 0 (today) —
+ *     they're due *now*, so they belong on today's pile.
+ *   - sections due beyond the window are dropped.
+ *   - unscheduled sections (no nextDue) are ignored.
+ *
+ * This counts scheduled load by date only — it does NOT subtract sections
+ * already finished today (the daily-progress line handles "done today"). So
+ * the strip is a stable picture of the schedule, not a live to-do count.
+ *
+ * @param {object} args
+ * @param {Array<object>} args.sections  raw section records
+ * @param {string} args.todayISO         YYYY-MM-DD
+ * @param {number} [args.days=7]         window length (e.g. 7 or 14)
+ * @returns {Array<{dateISO: string, daysFromToday: number, count: number}>}
+ */
+function dueForecast({ sections, todayISO, days = 7 }) {
+  if (!isISODate(todayISO)) {
+    throw new Error(`dueForecast: invalid todayISO "${todayISO}"`);
+  }
+  const n = Number.isFinite(days) && days > 0 ? Math.floor(days) : 7;
+  const buckets = [];
+  for (let i = 0; i < n; i++) {
+    buckets.push({
+      dateISO: addDaysISO(todayISO, i),
+      daysFromToday: i,
+      count: 0,
+    });
+  }
+  const allSections = Array.isArray(sections) ? sections : [];
+  for (const section of allSections) {
+    if (!section || typeof section !== 'object') continue;
+    const srs = srsStateForSection(section);
+    if (!srs.nextDue) continue;
+    let off;
+    try {
+      off = daysBetweenISO(todayISO, srs.nextDue);
+    } catch {
+      continue;
+    }
+    if (off < 0) off = 0; // overdue → today's pile
+    if (off >= n) continue; // beyond the forecast window
+    buckets[off].count += 1;
+  }
+  return buckets;
+}
+
+/**
  * A section is "mastered" once its scheduled interval has stretched out to
  * three weeks or more. Three weeks is a deliberate floor:
  *   - one week corresponds to the second SM-2 review (interval = 6 → 7 days
@@ -461,6 +515,43 @@ function computeDailyStreak(practiceDates, todayISO) {
     cursor = addDaysISO(cursor, -1);
   }
   return streak;
+}
+
+/**
+ * Pure: the longest run of consecutive practice days the user has ever
+ * recorded (their personal best), independent of whether that run is the
+ * current one. Unlike `computeDailyStreak` this doesn't care about "today" —
+ * it scans the whole history for the longest consecutive block.
+ *
+ * Surfaced next to the live streak as a "best: N" record so a broken streak
+ * still shows the high-water mark to beat.
+ *
+ * @param {Iterable<string>|Array<string>|Set<string>} practiceDates
+ *     ISO YYYY-MM-DD dates with at least one rep.
+ * @returns {number} 0 if no practice days; >= 1 otherwise.
+ */
+function computeLongestStreak(practiceDates) {
+  const set = new Set();
+  if (practiceDates) {
+    for (const d of practiceDates) {
+      if (isISODate(d)) set.add(d);
+    }
+  }
+  if (set.size === 0) return 0;
+  let best = 0;
+  for (const day of set) {
+    // Only start measuring a run from its first day (no predecessor in the
+    // set) so each run is counted exactly once regardless of iteration order.
+    if (set.has(addDaysISO(day, -1))) continue;
+    let len = 0;
+    let cursor = day;
+    while (set.has(cursor)) {
+      len += 1;
+      cursor = addDaysISO(cursor, 1);
+    }
+    if (len > best) best = len;
+  }
+  return best;
 }
 
 /**
@@ -706,6 +797,39 @@ function describeMemoryStage(stage) {
   return { stage: s, total: MEMORY_MAX_STAGE, ...table[s] };
 }
 
+/**
+ * Pure: tally how many sections sit at each memory-fade baseline stage
+ * (Watch / Find / Glance / From memory), derived from each section's
+ * `repetitions` via `memoryBaselineStage`. Gives a "recall maturity at a
+ * glance" breakdown of the whole library.
+ *
+ * Every section is counted (an unrated or freshly-lapsed section lands at
+ * Watch, stage 0), so `total` equals the library's section count.
+ *
+ * @param {Array<object>} sections  raw section records
+ * @returns {{
+ *   total: number,
+ *   stages: Array<{stage:number, key:string, label:string, hint:string, count:number}>,
+ * }}
+ */
+function memoryStageDistribution(sections) {
+  const counts = [0, 0, 0, 0];
+  const all = Array.isArray(sections) ? sections : [];
+  let total = 0;
+  for (const section of all) {
+    if (!section || typeof section !== 'object') continue;
+    counts[clampStage(memoryBaselineStage(section))] += 1;
+    total += 1;
+  }
+  return {
+    total,
+    stages: counts.map((count, stage) => {
+      const d = describeMemoryStage(stage);
+      return { stage: d.stage, key: d.key, label: d.label, hint: d.hint, count };
+    }),
+  };
+}
+
 // ---- Node export shim (browser-safe) ------------------------------------
 // In the browser these are plain globals (classic <script>). Under Node the
 // object-literal assignment is picked up by the CJS→ESM interop so the test
@@ -729,12 +853,15 @@ if (typeof module !== 'undefined' && module.exports) {
     describeNextDue,
     previewSm2Outcomes,
     buildReviewQueue,
+    dueForecast,
     isSectionMastered,
     computeDailyStreak,
+    computeLongestStreak,
     summariseProgress,
     MEMORY_MAX_STAGE,
     memoryBaselineStage,
     effectiveMemoryStage,
     describeMemoryStage,
+    memoryStageDistribution,
   };
 }

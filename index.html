@@ -72,6 +72,29 @@
             <h2>Progress</h2>
             <span id="stats-panel-today" class="stats-panel-today"></span>
           </header>
+          <div id="stats-goal" class="stats-goal" hidden>
+            <div class="stats-goal-ring" aria-hidden="true">
+              <svg viewBox="0 0 48 48" class="stats-goal-ring-svg">
+                <circle class="stats-goal-ring-track" cx="24" cy="24" r="20"></circle>
+                <circle id="stats-goal-ring-fill" class="stats-goal-ring-fill" cx="24" cy="24" r="20"></circle>
+              </svg>
+              <span id="stats-goal-ring-label" class="stats-goal-ring-label">0%</span>
+            </div>
+            <div class="stats-goal-info">
+              <span class="stats-goal-count">
+                <b id="stats-goal-done">0</b>
+                <span class="stats-goal-sep">/</span>
+                <span id="stats-goal-target">0</span>
+                sections done today
+              </span>
+              <div class="stats-goal-edit">
+                <span class="stats-goal-edit-label">Daily goal</span>
+                <button id="stats-goal-dec" class="btn btn-sm stats-goal-adj" type="button" aria-label="Lower daily goal">−</button>
+                <span id="stats-goal-value" class="stats-goal-value">Auto</span>
+                <button id="stats-goal-inc" class="btn btn-sm stats-goal-adj" type="button" aria-label="Raise daily goal">+</button>
+              </div>
+            </div>
+          </div>
           <ul id="stats-panel-tiles" class="stats-tiles" aria-live="polite">
             <li class="stats-tile" id="stats-tile-streak">
               <span class="stats-tile-value" id="stats-streak-value">0</span>
@@ -88,7 +111,31 @@
               <span class="stats-tile-label">Sections in rotation</span>
               <span class="stats-tile-detail" id="stats-rated-detail"></span>
             </li>
+            <li class="stats-tile" id="stats-tile-time">
+              <span class="stats-tile-value" id="stats-time-value">0m</span>
+              <span class="stats-tile-label">Time invested</span>
+              <span class="stats-tile-detail" id="stats-time-detail"></span>
+            </li>
           </ul>
+          <section
+            id="stats-memory"
+            class="stats-memory"
+            aria-label="Recall maturity"
+            hidden
+          >
+            <h3 class="stats-memory-title">Recall maturity</h3>
+            <div id="stats-memory-bar" class="stats-memory-bar" role="img"></div>
+            <ul id="stats-memory-legend" class="stats-memory-legend"></ul>
+          </section>
+          <section
+            id="stats-forecast"
+            class="stats-forecast"
+            aria-label="Sections coming due"
+            hidden
+          >
+            <h3 class="stats-forecast-title">Coming due</h3>
+            <div id="stats-forecast-bars" class="stats-forecast-bars"></div>
+          </section>
           <section
             id="stats-per-piece"
             class="stats-per-piece"
@@ -130,14 +177,32 @@
             <h2>Due today</h2>
             <span id="review-queue-count" class="review-queue-count"></span>
           </header>
+          <div class="review-queue-actions">
+            <button id="start-review-btn" class="btn btn-primary start-review-btn" type="button">
+              ▶ Start daily review
+            </button>
+            <span id="review-queue-overdue" class="review-queue-overdue" hidden></span>
+          </div>
           <p class="review-queue-hint">
-            Click a section to jump straight into practice.
+            Click a section to jump straight into practice, or start a guided
+            run through everything due.
           </p>
           <ul
             id="review-queue-list"
             class="review-queue-list"
             aria-live="polite"
           ></ul>
+        </section>
+        <section
+          id="continue-panel"
+          class="continue-panel"
+          aria-label="Recently practiced sections"
+          hidden
+        >
+          <header class="continue-header">
+            <h2>Continue practicing</h2>
+          </header>
+          <ul id="continue-list" class="continue-list" aria-live="polite"></ul>
         </section>
         <div id="viewer-placeholder-welcome" class="viewer-placeholder-welcome">
           <h2>Welcome</h2>
@@ -250,6 +315,13 @@
             </button>
           </header>
           <p id="practice-section-notes" class="practice-section-notes" hidden></p>
+
+          <div id="review-session-bar" class="review-session-bar" hidden>
+            <span id="review-session-progress" class="review-session-progress"></span>
+            <button id="review-session-skip" class="btn btn-sm review-session-skip" type="button">
+              Skip →
+            </button>
+          </div>
 
           <div class="practice-compact-row">
             <div class="practice-counter" aria-live="polite">
@@ -368,7 +440,7 @@
 
   <footer class="app-footer">
     <span id="app-status">Ready</span>
-    <span class="app-version">v0.20.0 &middot; midi</span>
+    <span class="app-version">v0.22.0 &middot; midi</span>
   </footer>
 
   <!-- Load as classic scripts (not modules) so the app works from file://
