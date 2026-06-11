@@ -573,6 +573,10 @@ function readBlobAsArrayBuffer(blob) {
  */
 async function buildSectionsForPiece(piece) {
   const ranges = sectionizeByPhrase(piece.notes, piece.ticksPerQuarter);
+  // Append the derived joins so the seams between sections get reviewed for
+  // fluency too: overlapping transition pairs for every boundary, then
+  // doubling run-throughs up to the full piece.
+  ranges.push(...makeDerivedRanges(ranges));
   const now = Date.now();
   const records = [];
   ranges.forEach((range, i) => {
@@ -585,7 +589,8 @@ async function buildSectionsForPiece(piece) {
       startSec: range.startSec,
       endSec: range.endSec,
       noteCount: range.noteCount,
-      notes: '',
+      notes: range.notes || '',
+      kind: range.kind,
       addedAt: now + i, // slight offset keeps order deterministic
       order: i,
     });
@@ -618,6 +623,8 @@ async function handleMidiFile(file) {
       setStatus(`"${file.name}" has no playable notes — ignored.`);
       return;
     }
+    // Suggest a hand + finger for every note (drawn on the falling notes).
+    annotateFingerings(parsed.notes, { ticksPerQuarter: parsed.ticksPerQuarter });
 
     const piece = {
       id: newPieceId(),
@@ -741,6 +748,7 @@ async function ensureMidiLoaded(piece) {
   }
   const arrayBuffer = await readBlobAsArrayBuffer(blob);
   const parsed = parseMidi(arrayBuffer);
+  annotateFingerings(parsed.notes, { ticksPerQuarter: parsed.ticksPerQuarter });
   piece.notes = parsed.notes;
   piece.ticksPerQuarter = parsed.ticksPerQuarter;
   piece.durationSec = parsed.durationSec;
@@ -916,6 +924,21 @@ function renderSectionsPanel() {
     name.className = 'section-list-name';
     name.textContent = sec.name;
     main.appendChild(name);
+
+    // Derived join sections get a small kind badge so they're visually
+    // distinct from the per-phrase sections they combine.
+    if (sec.kind === 'transition' || sec.kind === 'fluency') {
+      li.classList.add(`section-kind-${sec.kind}`);
+      const kindBadge = document.createElement('span');
+      kindBadge.className = 'section-list-kind-badge';
+      kindBadge.textContent =
+        sec.kind === 'transition' ? 'Transition' : 'Fluency';
+      kindBadge.title =
+        sec.kind === 'transition'
+          ? 'Joins two adjacent sections — practice the seam between them'
+          : 'Combined run-through — review the transitions between sections';
+      main.appendChild(kindBadge);
+    }
 
     const meta = document.createElement('span');
     meta.className = 'section-list-meta';
@@ -1240,6 +1263,7 @@ async function openPracticeView(sectionId) {
     count: cachedCount,
     saving: false,
     ratingInFlight: false,
+    pendingHalfRep: false,
     timerStartedAt: Date.now(),
     timerElapsed: 0,
     timerPaused: false,
@@ -1359,10 +1383,25 @@ function mountPlayer(piece, section) {
  * repetition toward today's goal of 10, reusing the exact same rep-log /
  * queue / stats / SM-2 pipeline the button used.
  */
-async function recordCleanRun() {
+async function recordCleanRun(info = {}) {
   if (!practiceState) return;
   const { sectionId, dateISO, count } = practiceState;
   if (isRepGoalMet(count)) return;
+
+  // Hesitation-hinted runs count as HALF a rep: the first one banks a half
+  // (no persisted increment — rep logs stay integers), the second completes
+  // it and falls through to the normal one-rep path. Session-scoped: a
+  // banked half doesn't survive a refresh, which errs on the strict side.
+  if (info.hinted) {
+    if (!practiceState.pendingHalfRep) {
+      practiceState.pendingHalfRep = true;
+      setStatus(
+        `Run done with ${info.hints} hint${info.hints === 1 ? '' : 's'} — that's half a rep. One more run to bank it.`,
+      );
+      return;
+    }
+    practiceState.pendingHalfRep = false;
+  }
 
   // Optimistic update so the counter ticks immediately.
   practiceState.count = count + 1;

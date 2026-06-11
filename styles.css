@@ -1133,6 +1133,32 @@ body {
   letter-spacing: 0.02em;
 }
 
+/* Kind badge on the derived join sections the auto-split appends —
+ * "Transition" (adjacent pair) and "Fluency" (combined run-through) — so
+ * they read as a different kind of review than the phrase sections. */
+.section-list-kind-badge {
+  display: inline-block;
+  margin-top: 4px;
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft, var(--surface-alt));
+  color: var(--accent, var(--text-muted));
+  border: 1px solid var(--accent, var(--border));
+}
+
+/* Transitions are the small/frequent join — render their badge muted so the
+ * accent-coloured run-throughs stand out as the bigger milestones. */
+.section-kind-transition .section-list-kind-badge {
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
 .section-list-rep-badge {
   display: inline-block;
   margin-top: 4px;
@@ -1795,9 +1821,11 @@ kbd {
 
 /* Maturity ramp: faintest = Watch (least internalised) → solid = From memory. */
 .stats-memory-seg[data-stage="0"] { opacity: 0.3; }
-.stats-memory-seg[data-stage="1"] { opacity: 0.52; }
-.stats-memory-seg[data-stage="2"] { opacity: 0.74; }
-.stats-memory-seg[data-stage="3"] { opacity: 1; }
+.stats-memory-seg[data-stage="1"] { opacity: 0.44; }
+.stats-memory-seg[data-stage="2"] { opacity: 0.58; }
+.stats-memory-seg[data-stage="3"] { opacity: 0.72; }
+.stats-memory-seg[data-stage="4"] { opacity: 0.86; }
+.stats-memory-seg[data-stage="5"] { opacity: 1; }
 
 .stats-memory-legend {
   list-style: none;
@@ -1825,9 +1853,11 @@ kbd {
 }
 
 .stats-memory-legend .stats-memory-swatch[data-stage="0"] { opacity: 0.3; }
-.stats-memory-legend .stats-memory-swatch[data-stage="1"] { opacity: 0.52; }
-.stats-memory-legend .stats-memory-swatch[data-stage="2"] { opacity: 0.74; }
-.stats-memory-legend .stats-memory-swatch[data-stage="3"] { opacity: 1; }
+.stats-memory-legend .stats-memory-swatch[data-stage="1"] { opacity: 0.44; }
+.stats-memory-legend .stats-memory-swatch[data-stage="2"] { opacity: 0.58; }
+.stats-memory-legend .stats-memory-swatch[data-stage="3"] { opacity: 0.72; }
+.stats-memory-legend .stats-memory-swatch[data-stage="4"] { opacity: 0.86; }
+.stats-memory-legend .stats-memory-swatch[data-stage="5"] { opacity: 1; }
 
 .stats-memory-legend b {
   color: var(--text);
@@ -2454,6 +2484,7 @@ kbd {
 
 .player-keys-toggle.is-active,
 .player-listen-btn.is-active,
+.player-fingers-toggle.is-active,
 .player-peek-btn.is-active {
   background: var(--accent);
   color: var(--accent-contrast);

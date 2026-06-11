@@ -624,6 +624,11 @@ function sectionToRecord(section) {
     addedAt,
     order: typeof section.order === 'number' ? section.order : addedAt,
   };
+  // Optional section kind — 'fluency' marks the auto-generated combined
+  // run-through section; absent on ordinary phrase sections.
+  if (typeof section.kind === 'string' && section.kind) {
+    record.kind = section.kind;
+  }
 
   // Optional SRS fields — only carried through when present + well-formed,
   // so legacy section records remain unchanged on edit.

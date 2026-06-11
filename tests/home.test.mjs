@@ -98,15 +98,15 @@ const { computeLongestStreak, dueForecast, memoryStageDistribution } = mod;
 {
   const empty = memoryStageDistribution([]);
   assert.equal(empty.total, 0, 'empty → total 0');
-  assert.equal(empty.stages.length, 4, 'always four stages');
+  assert.equal(empty.stages.length, 6, 'one bucket per fade stage (0..5)');
   assert.deepEqual(
     empty.stages.map((s) => s.count),
-    [0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0],
     'empty → all zero counts',
   );
   assert.deepEqual(
     empty.stages.map((s) => s.label),
-    ['Watch', 'Find', 'Glance', 'From memory'],
+    ['Watch', 'Find', 'Glance', 'Recall 40%', 'Recall 75%', 'From memory'],
     'stage labels in ramp order',
   );
 
@@ -115,20 +115,23 @@ const { computeLongestStreak, dueForecast, memoryStageDistribution } = mod;
     { repetitions: 0 }, // Watch (0)
     { repetitions: 1 }, // Find (1)
     { repetitions: 2 }, // Glance (2)
-    { repetitions: 3 }, // From memory (3)
-    { repetitions: 9 }, // clamps to From memory (3)
+    { repetitions: 3 }, // Recall 40% (3)
+    { repetitions: 4 }, // Recall 75% (4)
+    { repetitions: 5 }, // From memory (5)
+    { repetitions: 9 }, // clamps to From memory (5)
     null, // skipped
   ];
   const dist = memoryStageDistribution(sections);
-  assert.equal(dist.total, 6, 'null skipped; six valid sections');
+  assert.equal(dist.total, 8, 'null skipped; eight valid sections');
   assert.deepEqual(
     dist.stages.map((s) => s.count),
-    [2, 1, 1, 2],
+    [2, 1, 1, 1, 1, 2],
     'counts bucketed by baseline stage with clamping',
   );
   // Stage objects expose stage/key/label/hint/count for the legend.
   assert.equal(dist.stages[0].key, 'watch');
-  assert.equal(dist.stages[3].stage, 3);
+  assert.equal(dist.stages[5].stage, 5);
+  assert.equal(dist.stages[5].key, 'memory');
   assert.equal(typeof dist.stages[2].hint, 'string');
 }
 

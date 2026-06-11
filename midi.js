@@ -452,6 +452,103 @@ function sectionizeByPhrase(notes, ticksPerQuarter, opts = {}) {
 }
 
 /**
+ * Combine a contiguous slice of phrase ranges into one tick/second window.
+ * Internal helper for makeDerivedRanges. Pure.
+ */
+function combineRanges(slice) {
+  let startTick = Infinity;
+  let startSec = Infinity;
+  let endTick = -Infinity;
+  let endSec = -Infinity;
+  let noteCount = 0;
+  for (const r of slice) {
+    if (r.startTick < startTick) startTick = r.startTick;
+    if (r.startSec < startSec) startSec = r.startSec;
+    if (r.endTick > endTick) endTick = r.endTick;
+    if (r.endSec > endSec) endSec = r.endSec;
+    noteCount += r.noteCount || 0;
+  }
+  return { startTick, endTick, startSec, endSec, noteCount };
+}
+
+/**
+ * Build the derived practice sections that join phrase sections together so
+ * the seams between them get reviewed for fluency, not just the phrases
+ * themselves:
+ *
+ *   1. Transitions — every overlapping adjacent pair (1+2, 2+3, …), so each
+ *      boundary gets drilled at the smallest scale. `kind: 'transition'`.
+ *   2. Run-throughs — combined spans that double in size (sections 1–4,
+ *      5–8, then 1–8, …) up to one full-piece run-through, so fluency is
+ *      built up progressively. `kind: 'fluency'`.
+ *
+ * Spans that duplicate an earlier-emitted span (e.g. a trailing group of two
+ * that equals a transition pair, or a full run-through of a two-section
+ * piece) are skipped. Returns [] when there are fewer than two ranges.
+ * `order` continues sequentially after the phrase ranges. Pure.
+ *
+ * @param {Array<object>} ranges  output of sectionizeByPhrase()
+ * @returns {Array<object>} ranges shaped like sectionizeByPhrase's entries,
+ *   plus `kind` and a prefilled `notes` string
+ */
+function makeDerivedRanges(ranges) {
+  if (!Array.isArray(ranges) || ranges.length < 2) return [];
+  const n = ranges.length;
+  const out = [];
+  const seen = new Set();
+  let order = n;
+
+  /** Emit the span covering ranges[s..e) unless that span already exists. */
+  const emit = (s, e, kind, name, notes) => {
+    const key = `${s}:${e}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      ...combineRanges(ranges.slice(s, e)),
+      name,
+      order: order++,
+      kind,
+      notes,
+    });
+  };
+
+  // 1. Overlapping transition pairs — one per boundary.
+  for (let i = 0; i + 1 < n; i++) {
+    emit(
+      i,
+      i + 2,
+      'transition',
+      `Transition (Sections ${i + 1}+${i + 2})`,
+      `Link Sections ${i + 1} and ${i + 2} — practice the seam between them.`,
+    );
+  }
+
+  // 2. Doubling run-throughs: groups of 4, 8, … then the full piece.
+  for (let size = 4; size < n; size *= 2) {
+    for (let s = 0; s < n; s += size) {
+      const e = Math.min(n, s + size);
+      if (e - s < 2) continue; // lone trailing section — already a phrase
+      emit(
+        s,
+        e,
+        'fluency',
+        `Run-through (Sections ${s + 1}–${e})`,
+        `Play Sections ${s + 1}–${e} back to back — focus on the transitions.`,
+      );
+    }
+  }
+  emit(
+    0,
+    n,
+    'fluency',
+    `Run-through (Sections 1–${n})`,
+    'Play all sections back to back — focus on the transitions.',
+  );
+
+  return out;
+}
+
+/**
  * Filter a piece's notes down to a single section's tick window.
  * A note belongs to the section if it starts within [startTick, endTick).
  * Pure helper shared by the player and tests.
@@ -512,6 +609,7 @@ if (typeof module !== 'undefined' && module.exports) {
     buildTempoMap,
     pairNotes,
     sectionizeByPhrase,
+    makeDerivedRanges,
     notesInSection,
     groupNotesIntoSteps,
   };

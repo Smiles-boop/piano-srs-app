@@ -13,6 +13,7 @@ const mod = await import('../midi.js');
 const {
   parseMidi,
   sectionizeByPhrase,
+  makeDerivedRanges,
   groupNotesIntoSteps,
   notesInSection,
 } = mod;
@@ -156,6 +157,69 @@ function buildSampleMidi() {
     [4, 4, 2],
     'chunks are evenly distributed',
   );
+}
+
+// --- makeDerivedRanges: transition pairs + doubling run-throughs --------
+{
+  /** Fabricate n contiguous phrase ranges of `noteCount` 1 for span tests. */
+  const fakeRanges = (n) =>
+    Array.from({ length: n }, (_, i) => ({
+      startTick: i * 100,
+      endTick: i * 100 + 100,
+      startSec: i,
+      endSec: i + 1,
+      noteCount: 1,
+      name: `Section ${i + 1}`,
+      order: i,
+    }));
+
+  // n=6 (the sample-piece shape): 5 transitions, groups of 4, full piece.
+  // The trailing group 5–6 duplicates transition 5+6 and is skipped.
+  const derived = makeDerivedRanges(fakeRanges(6));
+  assert.deepEqual(
+    derived.map((r) => r.name),
+    [
+      'Transition (Sections 1+2)',
+      'Transition (Sections 2+3)',
+      'Transition (Sections 3+4)',
+      'Transition (Sections 4+5)',
+      'Transition (Sections 5+6)',
+      'Run-through (Sections 1–4)',
+      'Run-through (Sections 1–6)',
+    ],
+    'every boundary gets a transition; run-throughs double up to the piece',
+  );
+  assert.ok(
+    derived.every((r, i) => r.order === 6 + i),
+    'derived sections sort after the phrase sections, in emit order',
+  );
+  const t23 = derived[1];
+  assert.equal(t23.kind, 'transition');
+  assert.equal(t23.startTick, 100, 'transition spans from section 2…');
+  assert.equal(t23.endTick, 300, '…to the end of section 3');
+  assert.equal(t23.noteCount, 2);
+  const full = derived[derived.length - 1];
+  assert.equal(full.kind, 'fluency');
+  assert.equal(full.startTick, 0);
+  assert.equal(full.endTick, 600);
+  assert.equal(full.noteCount, 6, 'full run-through covers every note');
+  assert.ok(full.notes.length > 0, 'derived ranges carry a prefilled note');
+
+  // n=2: the lone transition IS the full piece — no duplicate run-through.
+  const pair = makeDerivedRanges(fakeRanges(2));
+  assert.equal(pair.length, 1);
+  assert.equal(pair[0].kind, 'transition');
+
+  // n=8: two groups of 4, then the full piece (size-8 group deduped).
+  assert.deepEqual(
+    makeDerivedRanges(fakeRanges(8))
+      .filter((r) => r.kind === 'fluency')
+      .map((r) => r.name),
+    ['Run-through (Sections 1–4)', 'Run-through (Sections 5–8)', 'Run-through (Sections 1–8)'],
+  );
+
+  assert.deepEqual(makeDerivedRanges(fakeRanges(1)), [], 'single section ⇒ nothing to join');
+  assert.deepEqual(makeDerivedRanges([]), [], 'no sections ⇒ nothing');
 }
 
 // --- groupNotesIntoSteps: chords vs melody ------------------------------

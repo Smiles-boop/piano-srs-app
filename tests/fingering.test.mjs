@@ -1,0 +1,139 @@
+// Tests for the pure fingering-suggestion engine in fingering.js.
+//
+// Run from the project root:
+//   node --test tests/fingering.test.mjs
+
+import assert from 'node:assert/strict';
+
+const mod = await import('../fingering.js');
+const { assignHands, suggestFingerings, annotateFingerings } = mod;
+
+/** Build a melody note list: one note per beat on a single track. */
+const melody = (midis, { track = 0, tpq = 480 } = {}) =>
+  midis.map((midi, i) => ({
+    midi,
+    startTick: i * tpq,
+    endTick: i * tpq + tpq / 2,
+    startSec: i * 0.5,
+    endSec: i * 0.5 + 0.25,
+    track,
+    channel: 0,
+  }));
+
+/** Build a block chord: all pitches at tick 0. */
+const chord = (midis, { track = 0 } = {}) =>
+  midis.map((midi) => ({
+    midi,
+    startTick: 0,
+    endTick: 480,
+    startSec: 0,
+    endSec: 0.5,
+    track,
+    channel: 0,
+  }));
+
+const fingersOf = (notes) =>
+  suggestFingerings(notes, { ticksPerQuarter: 480 }).map((s) => s && s.finger);
+
+// --- assignHands ---------------------------------------------------------
+{
+  // Two tracks: higher-mean track is the right hand.
+  const notes = [
+    ...melody([72, 74, 76], { track: 0 }),
+    ...melody([48, 50, 52], { track: 1 }),
+  ];
+  const hands = assignHands(notes);
+  assert.deepEqual(hands.slice(0, 3), ['rh', 'rh', 'rh']);
+  assert.deepEqual(hands.slice(3), ['lh', 'lh', 'lh']);
+
+  // Single track: per-note split around middle C.
+  const mono = assignHands(melody([50, 62]));
+  assert.deepEqual(mono, ['lh', 'rh']);
+
+  assert.deepEqual(assignHands([]), [], 'empty input');
+}
+
+// --- five-finger position: C D E F G → 1 2 3 4 5 -------------------------
+{
+  const fingers = fingersOf(melody([60, 62, 64, 65, 67]));
+  assert.deepEqual(fingers, [1, 2, 3, 4, 5]);
+}
+
+// --- one-octave C major scale: standard thumb-under fingering ------------
+{
+  const fingers = fingersOf(melody([60, 62, 64, 65, 67, 69, 71, 72]));
+  assert.deepEqual(
+    fingers,
+    [1, 2, 3, 1, 2, 3, 4, 5],
+    'RH C major scale uses thumb-under after the third finger',
+  );
+}
+
+// --- descending LH five-finger position: C3 B A G F → 1 2 3 4 5 ----------
+{
+  const notes = melody([48, 47, 45, 43, 41]);
+  const fingers = fingersOf(notes);
+  assert.deepEqual(fingers, [1, 2, 3, 4, 5]);
+  const hands = suggestFingerings(notes, { ticksPerQuarter: 480 }).map((s) => s.hand);
+  assert.ok(hands.every((h) => h === 'lh'), 'sub-middle-C melody lands in the left hand');
+}
+
+// --- descending LH octave scale: one cheap thumb crossing ----------------
+{
+  // The textbook pattern is 1 2 3 1 2 3 4 5; crossing at the half-step
+  // (1 2 3 4 5 1 2 3) is equally playable and the local cost model may pick
+  // either. Assert the structural properties rather than one convention.
+  const fingers = fingersOf(melody([48, 47, 45, 43, 41, 40, 38, 36]));
+  const crossings = fingers.filter((f, i) => i > 0 && f < fingers[i - 1]).length;
+  assert.equal(crossings, 1, 'exactly one thumb crossing in an octave scale');
+  assert.ok(
+    fingers.every((f, i) => i === 0 || f > fingers[i - 1] || f === 1),
+    'descents in finger number only happen via the thumb',
+  );
+}
+
+// --- C major triad: 1 3 5 -------------------------------------------------
+{
+  assert.deepEqual(fingersOf(chord([60, 64, 67])), [1, 3, 5]);
+}
+
+// --- octave: 1 5 ----------------------------------------------------------
+{
+  assert.deepEqual(fingersOf(chord([60, 72])), [1, 5]);
+}
+
+// --- repeated pitch keeps the same finger ---------------------------------
+{
+  const fingers = fingersOf(melody([67, 67, 67]));
+  assert.equal(fingers[0], fingers[1]);
+  assert.equal(fingers[1], fingers[2]);
+}
+
+// --- doubled pitch across tracks still gets a finger -----------------------
+{
+  const notes = [
+    ...chord([60, 64], { track: 0 }),
+    ...chord([60], { track: 1 }),
+  ];
+  // Force both tracks into one hand by pitch (single... two tracks → track
+  // split puts track 1 in LH; the doubled C4 is deduped within RH only).
+  const res = suggestFingerings(notes, { ticksPerQuarter: 480 });
+  assert.ok(res.every((s) => s && s.finger >= 1 && s.finger <= 5), 'every note fingered');
+}
+
+// --- annotateFingerings mutates in place -----------------------------------
+{
+  const notes = melody([60, 62, 64]);
+  const same = annotateFingerings(notes, { ticksPerQuarter: 480 });
+  assert.equal(same, notes);
+  assert.deepEqual(notes.map((n) => n.finger), [1, 2, 3]);
+  assert.ok(notes.every((n) => n.hand === 'rh'));
+}
+
+// --- empty / degenerate -----------------------------------------------------
+{
+  assert.deepEqual(suggestFingerings([]), []);
+  assert.deepEqual(suggestFingerings(null), []);
+}
+
+console.log('fingering helpers: all assertions passed');

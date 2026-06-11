@@ -732,13 +732,27 @@ function isISODate(s) {
 //   0 Watch       — full falling notes + key highlights (acquisition)
 //   1 Find        — full falling notes, NO key highlights (find the key)
 //   2 Glance      — notes only appear close to the hit line (shrunk look-ahead)
-//   3 From memory — blank; play from recall (post-press feedback still shows)
+//   3 Recall 40%  — cloze: a random 40% of the notes are hidden each run
+//   4 Recall 75%  — cloze: most notes hidden; the visible few anchor you
+//   5 From memory — blank except the opening note; play from recall
 //
-// All pure — these take an explicit `repetitions` / `runIndex` / `assist` so
-// they're deterministic and unit-testable, with no DOM / IDB / clock reads.
+// The cloze stages exist because Glance still exercises READING (just
+// rushed) — only hiding notes forces actual recall, and jumping straight
+// from all-cues to no-cues is a cliff. All pure — these take an explicit
+// `repetitions` / `runIndex` / `assist` so they're deterministic and
+// unit-testable, with no DOM / IDB / clock reads.
 
 /** Top of the fade ramp — "From memory". */
-const MEMORY_MAX_STAGE = 3;
+const MEMORY_MAX_STAGE = 5;
+
+/**
+ * Fraction of falling notes the player hides at a given fade stage. The
+ * subset itself is re-rolled by the player every run (so the user memorises
+ * the music, not the gaps); only the fraction is fixed here. Pure.
+ */
+function clozeFractionForStage(stage) {
+  return [0, 0, 0, 0.4, 0.75, 1][clampStage(stage)];
+}
 
 function clampStage(n) {
   const v = Math.floor(Number(n));
@@ -750,8 +764,8 @@ function clampStage(n) {
 /**
  * Baseline fade stage for a section, from how mature it is in the schedule.
  * Derived from `repetitions` (no new persisted field): a brand-new or lapsed
- * section starts at Watch; after ~3 successful spaced reviews it starts From
- * memory. Pure.
+ * section starts at Watch; each successful spaced review tightens one stage,
+ * so after ~5 reviews it starts From memory. Pure.
  *
  * @param {object|null} section
  */
@@ -792,16 +806,18 @@ function describeMemoryStage(stage) {
     { key: 'watch', label: 'Watch', hint: 'Full notes + key guides' },
     { key: 'find', label: 'Find', hint: 'Notes shown — find the keys yourself' },
     { key: 'glance', label: 'Glance', hint: 'Notes appear only at the last moment' },
-    { key: 'memory', label: 'From memory', hint: 'No guides — play from recall' },
+    { key: 'cloze1', label: 'Recall 40%', hint: 'A random 40% of the notes are hidden — recall them' },
+    { key: 'cloze2', label: 'Recall 75%', hint: 'Most notes hidden — the visible few anchor you' },
+    { key: 'memory', label: 'From memory', hint: 'Only the opening note shows — play from recall' },
   ];
   return { stage: s, total: MEMORY_MAX_STAGE, ...table[s] };
 }
 
 /**
  * Pure: tally how many sections sit at each memory-fade baseline stage
- * (Watch / Find / Glance / From memory), derived from each section's
- * `repetitions` via `memoryBaselineStage`. Gives a "recall maturity at a
- * glance" breakdown of the whole library.
+ * (Watch … From memory, one bucket per stage 0..MEMORY_MAX_STAGE), derived
+ * from each section's `repetitions` via `memoryBaselineStage`. Gives a
+ * "recall maturity at a glance" breakdown of the whole library.
  *
  * Every section is counted (an unrated or freshly-lapsed section lands at
  * Watch, stage 0), so `total` equals the library's section count.
@@ -813,7 +829,7 @@ function describeMemoryStage(stage) {
  * }}
  */
 function memoryStageDistribution(sections) {
-  const counts = [0, 0, 0, 0];
+  const counts = new Array(MEMORY_MAX_STAGE + 1).fill(0);
   const all = Array.isArray(sections) ? sections : [];
   let total = 0;
   for (const section of all) {
@@ -859,6 +875,7 @@ if (typeof module !== 'undefined' && module.exports) {
     computeLongestStreak,
     summariseProgress,
     MEMORY_MAX_STAGE,
+    clozeFractionForStage,
     memoryBaselineStage,
     effectiveMemoryStage,
     describeMemoryStage,

@@ -32,6 +32,8 @@ const FLASH_MS = 220;              // key flash duration
 const GLANCE_BEATS = 0.75;         // stage 2: notes only appear this close to the line
 const ASSIST_THRESHOLD = 3;        // consecutive run-resets before easing one stage
 const REVEAL_MS = 700;             // how long the corrective "you missed this" flash lasts
+const HINT_DELAY_MS = 3000;        // stall this long at a hidden step → ghost the next note
+const HINT_SHOW_MS = 1600;         // how long the hint ghost stays on the canvas
 
 // White-key pitch classes (C D E F G A B).
 const WHITE_PC = { 0: 1, 2: 1, 4: 1, 5: 1, 7: 1, 9: 1, 11: 1 };
@@ -99,6 +101,23 @@ function createPlayer(host, opts = {}) {
   keysToggle.textContent = '⌨ Computer keys: off';
   keysToggle.addEventListener('click', () => setComputerKeys(!computerKeysOn));
 
+  // Suggested fingerings (computed at import by fingering.js) drawn as
+  // digits on the falling notes. On by default; toggleable since they're
+  // heuristic and the user may prefer their own.
+  let showFingers = true;
+  const fingersToggle = document.createElement('button');
+  fingersToggle.type = 'button';
+  fingersToggle.className = 'btn btn-sm player-fingers-toggle is-active';
+  fingersToggle.setAttribute('aria-pressed', 'true');
+  fingersToggle.textContent = '🖐 Fingers';
+  fingersToggle.title = 'Show suggested fingering (1=thumb … 5=pinky)';
+  fingersToggle.addEventListener('click', () => {
+    showFingers = !showFingers;
+    fingersToggle.classList.toggle('is-active', showFingers);
+    fingersToggle.setAttribute('aria-pressed', String(showFingers));
+    draw();
+  });
+
   // Hold-to-reveal: temporarily forces full visuals while held.
   const peekBtn = document.createElement('button');
   peekBtn.type = 'button';
@@ -117,7 +136,7 @@ function createPlayer(host, opts = {}) {
   memoryChip.className = 'player-memory';
   memoryChip.setAttribute('aria-live', 'polite');
 
-  controls.append(midiStatus, memoryChip, handGroup, listenBtn, restartBtn, peekBtn, keysToggle);
+  controls.append(midiStatus, memoryChip, handGroup, listenBtn, restartBtn, peekBtn, fingersToggle, keysToggle);
 
   const feedback = document.createElement('p');
   feedback.className = 'player-feedback';
@@ -169,6 +188,15 @@ function createPlayer(host, opts = {}) {
   let playheadTick = 0;
   let rafId = null;
   let running = false;
+
+  // Cloze stages (Recall 40% / 75%): the randomly-hidden subset of notes,
+  // re-rolled every run so the user memorises the music, not the gaps.
+  let clozeHidden = new Set();   // note object refs hidden this run
+  let anchorNotes = new Set();   // first-step notes — always visible
+  // Hint on hesitation: stall at a hidden step → ghost the next note.
+  let lastProgressAt = 0;        // performance.now() of the last run progress
+  let hintsThisRun = 0;
+  let hintShownAt = 0;           // performance.now() when the ghost appeared
 
   // Web MIDI
   let midiAccess = null;
@@ -258,11 +286,13 @@ function createPlayer(host, opts = {}) {
   function setMemoryBase(n) {
     baseStage = typeof n === 'number' ? n : 0;
     notifyStage();
+    rollCloze(); // stage may have changed → hidden fraction changes
   }
 
   function setRunIndex(n) {
     runIndex = typeof n === 'number' && n > 0 ? n : 0;
     notifyStage();
+    rollCloze(); // stage may have changed → hidden fraction changes
   }
 
   function setPeek(on) {
@@ -304,6 +334,14 @@ function createPlayer(host, opts = {}) {
       need: new Set(s.pitches),
       got: new Set(),
     }));
+    // First-step notes are the entry anchor: cold starts are the hardest
+    // recall, so these stay visible at every fade stage.
+    const eps = ticksPerQuarter * 0.1;
+    anchorNotes = new Set(
+      steps.length
+        ? activeNotes.filter((n) => Math.abs(n.startTick - steps[0].tick) <= eps)
+        : [],
+    );
     computeKeyRange();
     buildKeyboard();
     restartRun(false);
@@ -419,6 +457,7 @@ function createPlayer(host, opts = {}) {
     const cur = steps[stepIndex];
     if (cur.need.has(midi)) {
       runStarted = true;
+      lastProgressAt = performance.now();
       cur.got.add(midi);
       flashKey(midi, 'is-correct');
       if (cur.got.size >= cur.need.size) advanceStep();
@@ -438,13 +477,18 @@ function createPlayer(host, opts = {}) {
   function advanceStep() {
     stepIndex++;
     if (stepIndex >= steps.length) {
-      // Clean run complete.
+      // Clean run complete. Runs that needed hesitation hints still finish
+      // (no mid-run nuke), but the app counts them as half reps.
+      const hints = hintsThisRun;
       cleanRunCount++;
       consecutiveResets = 0; // got all the way through → no longer struggling
-      feedback.textContent = '✓ Clean run!';
+      feedback.textContent =
+        hints > 0
+          ? `✓ Run complete — with ${hints} hint${hints === 1 ? '' : 's'}.`
+          : '✓ Clean run!';
       feedback.classList.remove('is-error');
       feedback.classList.add('is-success');
-      onRepComplete();
+      onRepComplete({ hinted: hints > 0, hints });
       // Reset for the next rep. We deliberately do NOT auto-satisfy held keys:
       // each step is advanced only by a fresh key press, which keeps repeated
       // notes (e.g. "C C") honest and matches how wait-mode trainers behave.
@@ -482,9 +526,29 @@ function createPlayer(host, opts = {}) {
     onMistake({ midi, atStep: wasAt });
   }
 
+  /**
+   * Re-roll which notes the cloze stages hide this run. Anchor (first-step)
+   * notes are never hidden. At non-cloze stages the set is simply empty.
+   */
+  function rollCloze() {
+    clozeHidden = new Set();
+    const stage = currentStage();
+    if (stage >= MEMORY_MAX_STAGE) return; // memory stage blanks everything itself
+    const fraction = clozeFractionForStage(stage);
+    if (fraction <= 0) return;
+    for (const n of activeNotes) {
+      if (anchorNotes.has(n)) continue;
+      if (Math.random() < fraction) clozeHidden.add(n);
+    }
+  }
+
   function restartRun(announce) {
     stepIndex = 0;
     runStarted = false;
+    hintsThisRun = 0;
+    hintShownAt = 0;
+    lastProgressAt = performance.now();
+    rollCloze();
     for (const s of steps) s.got = new Set();
     if (announce) {
       feedback.textContent = 'Run reset — play the highlighted notes.';
@@ -705,22 +769,31 @@ function createPlayer(host, opts = {}) {
 
     // Memory mode gates how much of the falling-note stream is drawn.
     const stage = currentStage();
-    if (stage >= 3) {
-      // From memory — blank canvas (post-press key flashes still show).
+    const curTick = steps[stepIndex] ? steps[stepIndex].tick : playheadTick;
+    const hintActive =
+      hintShownAt > 0 && performance.now() - hintShownAt < HINT_SHOW_MS;
+
+    if (stage >= MEMORY_MAX_STAGE) {
+      // From memory — blank canvas (post-press key flashes still show),
+      // except the entry anchor before the run starts and any active hint.
       ctx2d.fillStyle = 'rgba(148,163,184,0.5)';
       ctx2d.font = '13px system-ui, sans-serif';
       ctx2d.textAlign = 'center';
       ctx2d.fillText('Playing from memory', cssWidth / 2, NOTE_AREA_HEIGHT / 2);
       ctx2d.textAlign = 'start';
+      if (stepIndex === 0) {
+        drawGhostNotes(anchorNotes, hitY, pxPerTick, 0.5);
+      }
+      if (hintActive) drawHintGhost(hitY, pxPerTick);
       return;
     }
     // Stage 2 (Glance): only reveal notes once they're close to the hit line.
     const glanceTicks = GLANCE_BEATS * ticksPerQuarter;
 
-    const curTick = steps[stepIndex] ? steps[stepIndex].tick : playheadTick;
-
     for (const n of activeNotes) {
-      if (stage >= 2 && n.startTick - playheadTick > glanceTicks) continue;
+      if (stage === 2 && n.startTick - playheadTick > glanceTicks) continue;
+      // Cloze stages: skip this run's hidden subset (anchor never hidden).
+      if (clozeHidden.has(n)) continue;
       const yOnset = hitY - (n.startTick - playheadTick) * pxPerTick;
       const h = Math.max(6, (n.endTick - n.startTick) * pxPerTick);
       const yTop = yOnset - h;
@@ -739,8 +812,58 @@ function createPlayer(host, opts = {}) {
         roundRect(ctx2d, cx - w / 2, yTop, w, h, 4);
         ctx2d.stroke();
       }
+      // Suggested fingering digit near the note's onset end.
+      if (showFingers && n.finger && h >= 13 && w >= 11) {
+        ctx2d.fillStyle = '#f8fafc';
+        ctx2d.font = 'bold 10px system-ui, sans-serif';
+        ctx2d.textAlign = 'center';
+        ctx2d.fillText(String(n.finger), cx, yOnset - 4);
+      }
+    }
+    if (hintActive) drawHintGhost(hitY, pxPerTick);
+    ctx2d.globalAlpha = 1;
+    ctx2d.textAlign = 'start';
+  }
+
+  /** Draw a set of notes as dim outlined ghosts (anchor cue / hint). */
+  function drawGhostNotes(notes, hitY, pxPerTick, alpha) {
+    for (const n of notes) {
+      const yOnset = hitY - (n.startTick - playheadTick) * pxPerTick;
+      const h = Math.max(6, (n.endTick - n.startTick) * pxPerTick);
+      const yTop = yOnset - h;
+      if (yTop > NOTE_AREA_HEIGHT || yOnset < 0) continue;
+      const cx = keyCenterX(n.midi);
+      const w = isWhite(n.midi) ? whiteWidth * 0.8 : whiteWidth * 0.5;
+      ctx2d.globalAlpha = alpha;
+      ctx2d.fillStyle = handColor(n, false);
+      roundRect(ctx2d, cx - w / 2, yTop, w, h, 4);
+      ctx2d.fill();
+      ctx2d.strokeStyle = 'rgba(248,250,252,0.7)';
+      ctx2d.lineWidth = 1;
+      ctx2d.setLineDash([3, 3]);
+      roundRect(ctx2d, cx - w / 2, yTop, w, h, 4);
+      ctx2d.stroke();
+      ctx2d.setLineDash([]);
+      if (showFingers && n.finger && h >= 13 && w >= 11) {
+        ctx2d.fillStyle = '#f8fafc';
+        ctx2d.font = 'bold 10px system-ui, sans-serif';
+        ctx2d.textAlign = 'center';
+        ctx2d.fillText(String(n.finger), cx, yOnset - 4);
+        ctx2d.textAlign = 'start';
+      }
     }
     ctx2d.globalAlpha = 1;
+  }
+
+  /** Ghost the CURRENT step's notes after a hesitation hint fires. */
+  function drawHintGhost(hitY, pxPerTick) {
+    const cur = steps[stepIndex];
+    if (!cur) return;
+    const eps = ticksPerQuarter * 0.1;
+    const hintNotes = activeNotes.filter(
+      (n) => cur.need.has(n.midi) && Math.abs(n.startTick - cur.tick) <= eps,
+    );
+    drawGhostNotes(hintNotes, hitY, pxPerTick, 0.45);
   }
 
   function roundRect(c, x, y, w, h, r) {
@@ -754,12 +877,46 @@ function createPlayer(host, opts = {}) {
     c.closePath();
   }
 
+  /**
+   * Hint on hesitation: at the cloze/memory stages, stalling at a step whose
+   * notes are hidden ghosts in just that step (no full Peek needed). Each
+   * hint marks the run, and the app counts hinted runs as half reps.
+   */
+  function maybeHint() {
+    const cur = steps[stepIndex];
+    if (!cur || peeking) return;
+    const stage = currentStage();
+    if (stage < 3) return; // everything relevant is already visible
+    const now = performance.now();
+    if (now - lastProgressAt < HINT_DELAY_MS) return;
+    // Is the current step actually hidden from the user?
+    let hidden;
+    if (stage >= MEMORY_MAX_STAGE) {
+      hidden = stepIndex > 0; // step 0 shows the anchor ghost
+    } else {
+      const eps = ticksPerQuarter * 0.1;
+      hidden = activeNotes.some(
+        (n) =>
+          cur.need.has(n.midi) &&
+          Math.abs(n.startTick - cur.tick) <= eps &&
+          clozeHidden.has(n),
+      );
+    }
+    if (!hidden) return;
+    hintsThisRun++;
+    hintShownAt = now;
+    lastProgressAt = now; // next hint only after another full stall
+    feedback.textContent = `💡 Hint — runs with hints count as half a rep (${hintsThisRun} this run).`;
+    feedback.classList.remove('is-error', 'is-success');
+  }
+
   function frame() {
     if (!running) return;
     const target = steps[stepIndex] ? steps[stepIndex].tick
       : (section ? section.endTick : playheadTick);
     playheadTick += (target - playheadTick) * PLAYHEAD_EASING;
     if (Math.abs(target - playheadTick) < 0.5) playheadTick = target;
+    maybeHint();
     draw();
     rafId = requestAnimationFrame(frame);
   }
