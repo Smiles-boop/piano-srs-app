@@ -13,6 +13,11 @@
     <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Toggle piece library" aria-expanded="false">
       <span class="sidebar-toggle-icon" aria-hidden="true">&#9776;</span>
     </button>
+    <!-- Returns from a piece view to the home dashboard. Shown only while a
+         piece is open. -->
+    <button id="home-btn" class="home-btn" type="button" aria-label="Back to home dashboard" hidden>
+      <span aria-hidden="true">&#8962;</span> Home
+    </button>
     <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle dark mode">
       <span class="theme-toggle-icon" aria-hidden="true">&#9790;</span>
       <span class="theme-toggle-label">Dark</span>
@@ -32,7 +37,7 @@
           id="midi-file-input"
           class="visually-hidden"
           type="file"
-          accept=".mid,.midi,audio/midi,audio/x-midi"
+          accept=".mid,.midi,audio/midi,audio/x-midi,.musicxml,.mxl,.xml,application/vnd.recordare.musicxml+xml,application/vnd.recordare.musicxml"
           aria-hidden="true"
           tabindex="-1"
         />
@@ -228,7 +233,16 @@
         <header class="viewer-midi-header">
           <h2 id="viewer-midi-title" class="viewer-midi-title"></h2>
           <span id="viewer-midi-meta" class="viewer-midi-meta"></span>
+          <!-- Switches the main display between the engraved score and the
+               Synthesia falling-notes view. Shown only when a score exists. -->
+          <div id="viewer-view-toggle" class="viewer-view-toggle" role="group" aria-label="Choose view" hidden>
+            <button id="view-sheet-btn" class="viewer-view-btn" type="button">Sheet</button>
+            <button id="view-synthesia-btn" class="viewer-view-btn" type="button">Synthesia</button>
+          </div>
         </header>
+
+        <!-- Engraved score (OpenSheetMusicDisplay renders here). -->
+        <section id="viewer-sheet" class="viewer-sheet" aria-label="Sheet music" hidden></section>
 
         <section id="sections-panel" class="sections-panel" aria-label="Sections" hidden>
           <header class="sections-panel-header">
@@ -445,11 +459,16 @@
 
   <!-- Load as classic scripts (not modules) so the app works from file://
        without a local server. Order matters: db → srs → midi → fingering →
-       metronome → player → app. -->
+       musicxml → metronome → player → app. -->
   <script src="db.js"></script>
   <script src="srs.js"></script>
   <script src="midi.js"></script>
   <script src="fingering.js"></script>
+  <script src="musicxml.js"></script>
+  <!-- OpenSheetMusicDisplay (vendored UMD, exposes global `opensheetmusicdisplay`)
+       for engraving the score view. Local copy keeps the app offline. -->
+  <script src="vendor/opensheetmusicdisplay.min.js"></script>
+  <script src="sheet.js"></script>
   <script src="metronome.js"></script>
   <script src="player.js"></script>
   <script src="app.js"></script>

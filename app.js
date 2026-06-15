@@ -85,6 +85,11 @@ const els = {
   viewerMidi: document.getElementById('viewer-midi'),
   viewerMidiTitle: document.getElementById('viewer-midi-title'),
   viewerMidiMeta: document.getElementById('viewer-midi-meta'),
+  // Sheet-music view + [Sheet | Synthesia] toggle
+  viewerSheet: document.getElementById('viewer-sheet'),
+  viewToggle: document.getElementById('viewer-view-toggle'),
+  viewSheetBtn: document.getElementById('view-sheet-btn'),
+  viewSynthesiaBtn: document.getElementById('view-synthesia-btn'),
   // Sections panel
   sectionsPanel: document.getElementById('sections-panel'),
   resplitBtn: document.getElementById('resplit-sections-btn'),
@@ -125,6 +130,7 @@ const els = {
   importFileInput: document.getElementById('import-file-input'),
   // Mobile sidebar toggle (item 11c)
   sidebarToggle: document.getElementById('sidebar-toggle'),
+  homeBtn: document.getElementById('home-btn'),
   sidebarBackdrop: document.getElementById('sidebar-backdrop'),
   sidebar: document.getElementById('sidebar'),
   // Dark mode toggle (item 11b)
@@ -209,6 +215,20 @@ let activePieceId = null;
  * @type {ReturnType<typeof createPlayer> | null}
  */
 let player = null;
+
+/**
+ * The engraved sheet-music view (OpenSheetMusicDisplay wrapper), created
+ * lazily on first score render and reused across pieces. Null until a score
+ * piece is opened. @type {ReturnType<typeof createSheetView> | null}
+ */
+let sheetView = null;
+
+/**
+ * Which display the viewer is showing: 'sheet' (engraved score, default for
+ * score-backed pieces) or 'synthesia' (falling notes). Mirrored onto
+ * #viewer-midi as a `view-sheet` / `view-synthesia` class.
+ */
+let pieceView = 'synthesia';
 
 /**
  * Section form state. `null` = closed; the form is edit-only now
@@ -433,6 +453,7 @@ async function handleDeletePiece(pieceId, title) {
       closeSectionForm();
       if (els.viewerMidi) els.viewerMidi.hidden = true;
       if (els.viewerPlaceholder) els.viewerPlaceholder.hidden = false;
+      if (els.homeBtn) els.homeBtn.hidden = true;
     }
 
     renderPieceList(pieces);
@@ -664,10 +685,140 @@ async function handleMidiFile(file) {
   }
 }
 
+/** Inflate a raw-DEFLATE byte array via the browser's DecompressionStream. */
+async function inflateRaw(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(
+    new DecompressionStream('deflate-raw'),
+  );
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
 /**
- * One-click loader for the bundled demo piece (`samples/twinkle.mid`). Fetched
- * at runtime and run through the normal import path. If a Twinkle piece is
- * already in the library, just select it instead of importing a duplicate.
+ * Extract the score XML text from a compressed MusicXML container (.mxl — a
+ * ZIP). Reads the central directory (robust to data-descriptor headers),
+ * resolves the score path from META-INF/container.xml (falling back to the
+ * first non-META-INF .xml), and inflates it. Browser-only (DecompressionStream
+ * + DataView) — matches the app's existing "best in Chromium" stance.
+ */
+async function extractMxl(arrayBuffer) {
+  const dv = new DataView(arrayBuffer);
+  const bytes = new Uint8Array(arrayBuffer);
+  const decode = (u8) => new TextDecoder().decode(u8);
+  // Find the End Of Central Directory record (sig 0x06054b50) from the back.
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= 0; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('not a valid .mxl (no ZIP end record)');
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const entries = [];
+  for (let e = 0; e < count; e++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    entries.push({
+      method: dv.getUint16(p + 10, true),
+      compSize: dv.getUint32(p + 20, true),
+      localOff: dv.getUint32(p + 42, true),
+      name: decode(bytes.subarray(p + 46, p + 46 + dv.getUint16(p + 28, true))),
+    });
+    p += 46 + dv.getUint16(p + 28, true) + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true);
+  }
+  const dataOf = async (entry) => {
+    const lh = entry.localOff;
+    const start = lh + 30 + dv.getUint16(lh + 26, true) + dv.getUint16(lh + 28, true);
+    const comp = bytes.subarray(start, start + entry.compSize);
+    if (entry.method === 0) return comp;
+    if (entry.method === 8) return inflateRaw(comp);
+    throw new Error(`unsupported .mxl compression method ${entry.method}`);
+  };
+  let scoreName = null;
+  const container = entries.find((x) => x.name === 'META-INF/container.xml');
+  if (container) {
+    const m = /full-path="([^"]+)"/.exec(decode(await dataOf(container)));
+    if (m) scoreName = m[1];
+  }
+  if (!scoreName) {
+    const cand = entries.find(
+      (x) => !/^META-INF\//.test(x.name) && /\.(musicxml|xml)$/i.test(x.name),
+    );
+    scoreName = cand && cand.name;
+  }
+  const entry = scoreName && entries.find((x) => x.name === scoreName);
+  if (!entry) throw new Error('no score found inside the .mxl');
+  return decode(await dataOf(entry));
+}
+
+/** Read a chosen score file to its raw MusicXML text (.mxl is unzipped). */
+async function readScoreText(file) {
+  if (/\.mxl$/i.test(file.name)) {
+    return extractMxl(await readBlobAsArrayBuffer(file));
+  }
+  return file.text();
+}
+
+/** Handle a chosen MusicXML file: derive notes, persist score, auto-split. */
+async function handleScoreFile(file) {
+  if (!file) return;
+  setStatus(`Loading "${file.name}"…`);
+  try {
+    let xml;
+    try {
+      xml = await readScoreText(file);
+    } catch (err) {
+      setStatus(`Couldn't read "${file.name}": ${err.message || err}`);
+      return;
+    }
+    const parsed = parseMusicXml(xml);
+    if (!parsed.notes.length) {
+      setStatus(`"${file.name}" has no playable notes — ignored.`);
+      return;
+    }
+    annotateFingerings(parsed.notes, { ticksPerQuarter: parsed.ticksPerQuarter });
+
+    const piece = {
+      id: newPieceId(),
+      title: titleFromFilename(file.name),
+      durationSec: parsed.durationSec,
+      ticksPerQuarter: parsed.ticksPerQuarter,
+      noteCount: parsed.notes.length,
+      addedAt: Date.now(),
+      notes: parsed.notes,
+      sections: [],
+      source: 'musicxml',
+      hasScore: true,
+      // Kept in memory so the sheet view + measure mapping need no reparse.
+      musicXml: xml,
+      scoreMeasures: parsed.measures,
+    };
+
+    // Persist the extracted score.xml text (so both the parser and OSMD can
+    // read it directly without re-unzipping).
+    const blob = new Blob([xml], { type: 'application/xml' });
+    try {
+      await savePiece(pieceToRecord(piece, null, blob));
+    } catch (err) {
+      console.warn('IndexedDB save failed; piece will live in memory only', err);
+      setStatus(`Added "${piece.title}" but couldn't save it — refresh will lose it.`);
+    }
+
+    piece.sections = await buildSectionsForPiece(piece);
+    pieces.push(piece);
+    renderPieceList(pieces);
+    setStatus(
+      `Added "${piece.title}" (${piece.noteCount} notes, ${piece.sections.length} sections).`,
+    );
+    selectPiece(piece.id);
+  } catch (err) {
+    console.error('Failed to load score', err);
+    setStatus(`Failed to load score: ${err.message || err}`);
+  }
+}
+
+/**
+ * One-click loader for the bundled demo piece (`samples/twinkle.musicxml`).
+ * Fetched at runtime and run through the score-import path so the sample shows
+ * off the engraved sheet view. If a Twinkle piece is already in the library,
+ * just select it instead of importing a duplicate.
  */
 async function handleLoadSample() {
   const existing = pieces.find((p) => p.title === 'Twinkle Twinkle');
@@ -678,7 +829,7 @@ async function handleLoadSample() {
   setStatus('Loading sample piece…');
   let buf;
   try {
-    const res = await fetch('samples/twinkle.mid');
+    const res = await fetch('samples/twinkle.musicxml');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     buf = await res.arrayBuffer();
   } catch (err) {
@@ -688,8 +839,8 @@ async function handleLoadSample() {
     );
     return;
   }
-  await handleMidiFile(
-    new File([buf], 'Twinkle Twinkle.mid', { type: 'audio/midi' }),
+  await handleScoreFile(
+    new File([buf], 'Twinkle Twinkle.musicxml', { type: 'application/xml' }),
   );
 }
 
@@ -712,9 +863,9 @@ async function selectPiece(pieceId) {
   repCountsToday.clear();
 
   try {
-    await ensureMidiLoaded(piece);
+    await ensureNotesLoaded(piece);
   } catch (err) {
-    console.error('Failed to load MIDI from storage', err);
+    console.error('Failed to load notes from storage', err);
     setStatus(`Failed to load "${piece.title}": ${err.message || err}`);
     return;
   }
@@ -736,12 +887,31 @@ async function selectPiece(pieceId) {
 }
 
 /**
- * If the piece doesn't have parsed `notes` in memory yet, fetch its MIDI Blob
- * from IDB and parse it. Mutates the piece in place.
+ * If the piece doesn't have parsed `notes` in memory yet, fetch its source
+ * blob from IDB and parse it. Branches on `piece.source`: a 'musicxml' piece
+ * derives its timeline (and keeps the score XML + measures for the sheet view)
+ * from the stored score; a 'midi' piece parses its MIDI bytes. Mutates the
+ * piece in place.
  */
-async function ensureMidiLoaded(piece) {
+async function ensureNotesLoaded(piece) {
   if (Array.isArray(piece.notes)) return;
   setStatus(`Loading "${piece.title}"…`);
+  if (piece.source === 'musicxml') {
+    const blob = await getPieceMusicXmlBlob(piece.id);
+    if (!blob) {
+      throw new Error('Score data is missing from local storage');
+    }
+    const xml = await blob.text();
+    const parsed = parseMusicXml(xml);
+    annotateFingerings(parsed.notes, { ticksPerQuarter: parsed.ticksPerQuarter });
+    piece.notes = parsed.notes;
+    piece.ticksPerQuarter = parsed.ticksPerQuarter;
+    piece.durationSec = parsed.durationSec;
+    piece.noteCount = parsed.notes.length;
+    piece.musicXml = xml;
+    piece.scoreMeasures = parsed.measures;
+    return;
+  }
   const blob = await getPieceBlob(piece.id);
   if (!blob) {
     throw new Error('MIDI data is missing from local storage');
@@ -773,9 +943,66 @@ function showMidiViewer(piece) {
   if (!els.viewerMidi || !els.viewerPlaceholder) return;
   els.viewerPlaceholder.hidden = true;
   els.viewerMidi.hidden = false;
+  if (els.homeBtn) els.homeBtn.hidden = false; // a piece is open → offer Home
   if (els.viewerMidiTitle) els.viewerMidiTitle.textContent = piece.title;
   if (els.viewerMidiMeta) els.viewerMidiMeta.textContent = formatPieceMeta(piece);
+  setupPieceView(piece);
   setStatus(`Showing "${piece.title}" — pick a section to practice.`);
+}
+
+/**
+ * Configure the [Sheet | Synthesia] view for the selected piece. A score-backed
+ * piece renders the engraved score and defaults to the Sheet view; a MIDI-only
+ * piece hides the toggle/sheet and stays on Synthesia.
+ */
+function setupPieceView(piece) {
+  const canSheet = !!(
+    piece.hasScore &&
+    piece.musicXml &&
+    typeof createSheetView === 'function' &&
+    window.opensheetmusicdisplay
+  );
+  if (els.viewToggle) els.viewToggle.hidden = !canSheet;
+  if (els.viewerSheet) els.viewerSheet.hidden = !canSheet;
+  if (!canSheet) {
+    if (sheetView) sheetView.clearHighlight();
+    setPieceView('synthesia');
+    return;
+  }
+  setPieceView('sheet');
+  if (!sheetView) sheetView = createSheetView(els.viewerSheet);
+  // Engrave suggested fingerings on the landmark notes (sparse) by splicing
+  // them into the score XML before OSMD renders it.
+  let xml = piece.musicXml;
+  try {
+    flagFingeringLandmarks(piece.notes, { ticksPerQuarter: piece.ticksPerQuarter });
+    xml = injectFingerings(piece.musicXml, piece.notes);
+  } catch (err) {
+    console.warn('Could not add fingerings to the score', err);
+  }
+  // Render the score (async; the view guards overlapping loads internally).
+  sheetView.load(xml, piece.ticksPerQuarter).catch((err) => {
+    console.error('Failed to render score', err);
+    setStatus(`Couldn't render the score: ${err.message || err}`);
+    if (els.viewToggle) els.viewToggle.hidden = true;
+    if (els.viewerSheet) els.viewerSheet.hidden = true;
+    setPieceView('synthesia');
+  });
+}
+
+/** Switch the active display, reflecting it on the toggle + #viewer-midi class. */
+function setPieceView(view) {
+  pieceView = view === 'sheet' ? 'sheet' : 'synthesia';
+  if (els.viewerMidi) {
+    els.viewerMidi.classList.toggle('view-sheet', pieceView === 'sheet');
+    els.viewerMidi.classList.toggle('view-synthesia', pieceView === 'synthesia');
+  }
+  if (els.viewSheetBtn) {
+    els.viewSheetBtn.classList.toggle('is-active', pieceView === 'sheet');
+  }
+  if (els.viewSynthesiaBtn) {
+    els.viewSynthesiaBtn.classList.toggle('is-active', pieceView === 'synthesia');
+  }
 }
 
 // --- Sections panel ------------------------------------------------------
@@ -1358,6 +1585,15 @@ function mountPlayer(piece, section) {
       onRepComplete: recordCleanRun,
       onMistake: () => {
         setStatus('Wrong note — run reset. Play the section again from the top.');
+        // Snap the score cursor back to the section's start on a reset.
+        const sec = getActiveSection();
+        if (sheetCursorReady() && sec) sheetView.moveCursorToTick(sec.startTick);
+      },
+      // Follow-cursor: advance the engraved-score cursor to each new step.
+      onProgress: (info) => {
+        if (sheetCursorReady() && info && typeof info.tick === 'number') {
+          sheetView.moveCursorToTick(info.tick);
+        }
       },
       onStageChange: (info) => {
         // Memory mode surfaces its level in the player's own chip; mirror big
@@ -1375,6 +1611,32 @@ function mountPlayer(piece, section) {
   const runIndex = practiceState ? practiceState.count : 0;
   player.load(piece, section, { baseStage, runIndex });
   player.start();
+  // On the engraved score: highlight this section's measures and park the
+  // cursor at its first onset.
+  syncSheetToSection(piece, section);
+}
+
+/** True when the sheet view is rendered and the active piece has a score. */
+function sheetCursorReady() {
+  const piece = getActivePiece();
+  return !!(sheetView && sheetView.isReady() && piece && piece.hasScore);
+}
+
+/**
+ * Highlight a section's measures on the engraved score and move the cursor to
+ * its first onset. No-op for MIDI-only pieces or before the score has rendered.
+ */
+function syncSheetToSection(piece, section) {
+  if (!sheetCursorReady() || !piece.scoreMeasures) return;
+  const mr = measuresForSection(
+    { measures: piece.scoreMeasures }, section, piece.ticksPerQuarter,
+  );
+  if (mr.count) {
+    sheetView.highlightMeasures(mr.measures[0].index, mr.measures[mr.count - 1].index);
+  } else {
+    sheetView.clearHighlight();
+  }
+  sheetView.moveCursorToTick(section.startTick);
 }
 
 /**
@@ -1568,6 +1830,11 @@ function closePracticeView({ silent, keepReviewSession } = {}) {
   }
   stopMetronome(); // item 12b — silence metronome when leaving practice
   if (player) player.stop(); // stop the Synthesia engine + release MIDI input
+  // Clear the score's section highlight + follow cursor when leaving practice.
+  if (sheetView && sheetView.isReady()) {
+    sheetView.clearHighlight();
+    sheetView.clearCursor();
+  }
   if (els.viewerMidi) els.viewerMidi.classList.remove('is-practicing');
   const wasActive = !!practiceState;
   practiceState = null;
@@ -2821,9 +3088,21 @@ function showDashboard() {
     els.viewerMidi.classList.remove('is-practicing');
   }
   if (els.viewerPlaceholder) els.viewerPlaceholder.hidden = false;
+  if (els.homeBtn) els.homeBtn.hidden = true; // home button is piece-view only
   renderReviewQueue();
   renderStats();
   renderContinuePanel();
+}
+
+/**
+ * Home button handler: leave the current piece (closing any practice session /
+ * open form first) and return to the dashboard. Safe to call from anywhere.
+ */
+function goHome() {
+  closePracticeView({ silent: true });
+  closeSectionForm();
+  showDashboard();
+  setStatus('Home — pick a section that’s due, or open a piece from the library.');
 }
 
 /** Paint the guided-review banner inside the practice panel. */
@@ -3376,6 +3655,10 @@ function init() {
     els.themeToggle.addEventListener('click', toggleTheme);
   }
 
+  if (els.homeBtn) {
+    els.homeBtn.addEventListener('click', goHome);
+  }
+
   // --- Mobile sidebar (item 11c) ------------------------------------------
   if (els.sidebarToggle) {
     els.sidebarToggle.addEventListener('click', toggleSidebar);
@@ -3392,12 +3675,27 @@ function init() {
       const input = /** @type {HTMLInputElement} */ (e.target);
       const file = input.files && input.files[0];
       input.value = ''; // reset so picking the same file again retriggers
-      await handleMidiFile(file);
+      if (!file) return;
+      // Route by extension: MusicXML scores derive their own timeline; MIDI
+      // takes the existing path.
+      if (/\.(musicxml|mxl|xml)$/i.test(file.name)) {
+        await handleScoreFile(file);
+      } else {
+        await handleMidiFile(file);
+      }
     });
   }
 
   if (els.loadSampleBtn) {
     els.loadSampleBtn.addEventListener('click', () => handleLoadSample());
+  }
+
+  // [Sheet | Synthesia] view toggle.
+  if (els.viewSheetBtn) {
+    els.viewSheetBtn.addEventListener('click', () => setPieceView('sheet'));
+  }
+  if (els.viewSynthesiaBtn) {
+    els.viewSynthesiaBtn.addEventListener('click', () => setPieceView('synthesia'));
   }
 
   if (els.resplitBtn) {

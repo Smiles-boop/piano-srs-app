@@ -287,9 +287,75 @@ function suggestFingerings(notes, opts = {}) {
 function annotateFingerings(notes, opts = {}) {
   const suggestions = suggestFingerings(notes, opts);
   for (let i = 0; i < (notes || []).length; i++) {
-    if (suggestions[i]) {
-      notes[i].hand = suggestions[i].hand;
-      notes[i].finger = suggestions[i].finger;
+    const n = notes[i];
+    if (!n) continue;
+    if (suggestions[i]) n.hand = suggestions[i].hand;
+    // The score's own fingering always wins; auto-suggest only fills the gaps.
+    if (typeof n.scoreFinger === 'number') {
+      n.finger = n.scoreFinger;
+      n.fingerSource = 'score';
+    } else if (suggestions[i]) {
+      n.finger = suggestions[i].finger;
+      n.fingerSource = 'auto';
+    }
+  }
+  return notes;
+}
+
+/** Leap (semitones) that counts as a real position jump — an octave. */
+const LANDMARK_LEAP_SEMITONES = 12;
+
+/**
+ * Flag the "landmark" notes — the sparse subset where a fingering reminder is
+ * genuinely useful, so the score isn't cluttered with a number on every note.
+ *
+ * Per hand, two kinds of signal:
+ *   - STRONG (always a landmark): the first note of the hand, or a RE-ENTRY
+ *     after a rest of ≥ a half note (a real break in the line).
+ *   - POSITION SHIFT (a landmark only if spaced out): an octave+ LEAP, or a
+ *     THUMB tuck/cross (finger 1 following another finger). These are common in
+ *     scales/arpeggios, so they're rate-limited to at most one per `minSpacing`
+ *     per hand — otherwise a busy passage would flag nearly every note.
+ *
+ * Sets `n.fingerLandmark` in place and returns the array. Pure.
+ *
+ * @param {Array<object>} notes  fingered notes (need `finger`, `hand`/`track`)
+ * @param {{ticksPerQuarter?:number}} [opts]
+ */
+function flagFingeringLandmarks(notes, opts = {}) {
+  if (!Array.isArray(notes)) return notes;
+  const tpq = opts.ticksPerQuarter || 480;
+  const restGap = 2 * tpq;     // a half note of silence ⇒ a fresh entry
+  const minSpacing = 2 * tpq;  // ≤ one position-shift landmark per half note
+  const byHand = new Map();
+  for (const n of notes) {
+    n.fingerLandmark = false;
+    const key = n.hand || n.track || 0;
+    if (!byHand.has(key)) byHand.set(key, []);
+    byHand.get(key).push(n);
+  }
+  for (const arr of byHand.values()) {
+    arr.sort((a, b) => a.startTick - b.startTick || a.midi - b.midi);
+    let prev = null;
+    let lastMark = -Infinity;
+    for (const n of arr) {
+      let strong = false;
+      let shift = false;
+      if (!prev) {
+        strong = true; // hand entry
+      } else {
+        if (n.startTick - prev.endTick >= restGap) strong = true; // re-entry
+        if (Math.abs(n.midi - prev.midi) >= LANDMARK_LEAP_SEMITONES) shift = true;
+        if (n.finger === 1 && prev.finger && prev.finger !== 1 && n.midi !== prev.midi) {
+          shift = true; // thumb tuck / cross
+        }
+      }
+      const mark = strong || (shift && n.startTick - lastMark >= minSpacing);
+      if (mark) {
+        n.fingerLandmark = true;
+        lastMark = n.startTick;
+      }
+      prev = n;
     }
   }
   return notes;
@@ -303,5 +369,6 @@ if (typeof module !== 'undefined' && module.exports) {
     assignHands,
     suggestFingerings,
     annotateFingerings,
+    flagFingeringLandmarks,
   };
 }

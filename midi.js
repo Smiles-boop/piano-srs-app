@@ -417,27 +417,56 @@ function sectionizeByPhrase(notes, ticksPerQuarter, opts = {}) {
   }
 
   // Pass 3: hard-split any group longer than maxNotes into even chunks.
+  // Chunk ends are snapped FORWARD to an onset boundary so a split never falls
+  // in the middle of a chord / shared-onset group. This keeps consecutive
+  // sections strictly onset-ordered (ns[b].startTick < ns[b+1].startTick at
+  // every boundary), which lets the emit step cleanly clamp a section's end to
+  // the next onset, and lets `notesInSection` (which keys off onset) reproduce
+  // the split exactly. A chunk may end up a note or two over `size` to absorb a
+  // chord; that's a fair trade for never bisecting a simultaneity.
   const finalRuns = [];
   for (const [a, b] of merged) {
     const count = b - a + 1;
     if (count <= maxNotes) {
       finalRuns.push([a, b]);
-    } else {
-      const chunks = Math.ceil(count / maxNotes);
-      const size = Math.ceil(count / chunks);
-      for (let s = a; s <= b; s += size) {
-        finalRuns.push([s, Math.min(b, s + size - 1)]);
-      }
+      continue;
+    }
+    const chunks = Math.ceil(count / maxNotes);
+    const size = Math.ceil(count / chunks);
+    let s = a;
+    while (s <= b) {
+      let e = Math.min(b, s + size - 1);
+      while (e < b && ns[e + 1].startTick === ns[e].startTick) e++;
+      finalRuns.push([s, e]);
+      s = e + 1;
     }
   }
 
-  // Emit sections.
+  // Emit sections. A section's natural end is its latest note RELEASE, but a
+  // long held note (pedal point, whole-note bass, fermata) can ring out well
+  // past where the next phrase begins — which would make consecutive sections
+  // OVERLAP and double-count notes (`notesInSection` keys off onset, so the
+  // held note's section would also swallow every phrase it rings over). So we
+  // clamp each section's end to the next section's first onset, yielding a
+  // clean non-overlapping partition. The clamp is skipped in the degenerate
+  // case where the next section starts on the exact same tick (e.g. a giant
+  // simultaneous chord hard-split by note count), so a section never clips
+  // away its own notes.
   return finalRuns.map(([a, b], idx) => {
     let endTick = ns[a].endTick;
     let endSec = ns[a].endSec;
     for (let i = a; i <= b; i++) {
       if (ns[i].endTick > endTick) endTick = ns[i].endTick;
       if (ns[i].endSec > endSec) endSec = ns[i].endSec;
+    }
+    const next = finalRuns[idx + 1];
+    if (next) {
+      const nextStart = ns[next[0]];
+      // ns[b] holds this run's latest onset (notes are start-sorted).
+      if (nextStart.startTick > ns[b].startTick) {
+        if (nextStart.startTick < endTick) endTick = nextStart.startTick;
+        if (nextStart.startSec < endSec) endSec = nextStart.startSec;
+      }
     }
     return {
       startTick: ns[a].startTick,

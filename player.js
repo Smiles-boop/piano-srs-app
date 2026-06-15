@@ -496,7 +496,13 @@ function createPlayer(host, opts = {}) {
       // ever judged, so a held note can neither complete nor fail a later step.
       restartRun(false);
     } else {
-      onProgress({ stepIndex, total: steps.length });
+      // `tick` is the absolute MIDI tick of the now-current step, so a sheet
+      // cursor can snap to the matching onset in the score.
+      onProgress({
+        stepIndex,
+        total: steps.length,
+        tick: steps[stepIndex] ? steps[stepIndex].tick : null,
+      });
     }
   }
 
@@ -978,6 +984,12 @@ function createPlayer(host, opts = {}) {
     setRunIndex,
     setPeek,
     getStage,
+    // Absolute tick of a step (default: the current step) — lets the sheet
+    // cursor sync to the section's first onset when practice opens.
+    getStepTick: (i) => {
+      const idx = typeof i === 'number' ? i : stepIndex;
+      return steps[idx] ? steps[idx].tick : null;
+    },
   };
 }
 

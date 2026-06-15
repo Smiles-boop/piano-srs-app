@@ -182,6 +182,31 @@ body {
   font-size: 13px;
 }
 
+/* Home button — returns to the dashboard; sits on the right with the theme
+   toggle. `margin-left:auto` pushes this group to the right edge. */
+.home-btn {
+  margin-left: auto;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+  line-height: 1;
+}
+.home-btn[hidden] { display: none; }
+.home-btn:hover {
+  background: var(--surface);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 /* Dark mode toggle (item 11b) */
 .theme-toggle {
   margin-left: auto;
@@ -199,6 +224,10 @@ body {
   transition: background-color 0.15s ease, border-color 0.15s ease;
   line-height: 1;
 }
+
+/* When the home button is present it already consumed the auto-margin, so the
+   theme toggle sits right next to it rather than pushing further away. */
+.home-btn:not([hidden]) + .theme-toggle { margin-left: 0; }
 
 .theme-toggle:hover {
   background: var(--surface);
@@ -2606,3 +2635,63 @@ kbd {
   .player-controls { gap: 6px; }
   .player-midi-status { flex-basis: 100%; }
 }
+
+/* ============================================================
+   Sheet-music view (OpenSheetMusicDisplay)
+   ============================================================ */
+
+/* The engraved score is black ink, so it always sits on a white "paper"
+   panel regardless of the app theme. The panel scrolls; the SVG inside
+   scales to the panel width via its viewBox. */
+.viewer-sheet {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  overflow: auto;
+  max-height: 64vh;
+  margin-bottom: 14px;
+}
+.viewer-sheet[hidden] { display: none; }
+
+/* Section highlight: translucent accent band injected as <rect>s into the
+   score SVG (viewBox coords, so it scales with the engraving). */
+.sheet-measure-highlight {
+  fill: var(--accent);
+  fill-opacity: 0.14;
+  stroke: var(--accent);
+  stroke-opacity: 0.55;
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+
+/* [Sheet | Synthesia] view toggle in the piece-viewer header. */
+.viewer-view-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+}
+.viewer-view-toggle[hidden] { display: none; }
+.viewer-view-btn {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.viewer-view-btn.is-active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+/* The toggle swaps which display is visible. When the sheet is active the
+   falling-notes canvas is hidden (the keyboard + controls stay mounted for
+   input); when Synthesia is active the sheet panel is hidden. */
+.viewer-midi.view-sheet .player-canvas { display: none; }
+.viewer-midi.view-synthesia .viewer-sheet { display: none; }

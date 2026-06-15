@@ -48,7 +48,10 @@ const DB_NAME = 'pianosrs';
 // `midiBlob` (not `pdfBlob`) and section records carry tick/second ranges
 // instead of page + measure text. The shapes are incompatible, so the v4
 // upgrade clears the old stores (see onupgradeneeded).
-const DB_VERSION = 4;
+// v5: pieces may carry an optional `musicXmlBlob` (engraved-score source) and
+// a `source` field ('midi' | 'musicxml'). Purely additive — no migration, no
+// data loss; old records simply lack the new fields.
+const DB_VERSION = 5;
 const STORE_PIECES = 'pieces';
 const STORE_SECTIONS = 'sections';
 const STORE_REP_LOGS = 'repLogs';
@@ -99,6 +102,9 @@ function openDb() {
         tx.objectStore(STORE_SECTIONS).clear();
         tx.objectStore(STORE_REP_LOGS).clear();
       }
+      // v5 → optional `musicXmlBlob` + `source` on piece records. Additive:
+      // the existing pieces store already holds them with no schema change, so
+      // there is nothing to migrate and no data to clear.
     };
     req.onsuccess = (e) => resolve(e.target.result);
     req.onerror = (e) =>
@@ -153,6 +159,17 @@ async function getPieceBlob(id) {
   const db = await openDb();
   const rec = await awaitRequest(piecesStore(db, 'readonly').get(id));
   return rec ? rec.midiBlob : null;
+}
+
+/**
+ * Fetch the stored MusicXML Blob (plain score.xml text) for a piece, or null.
+ * Mirrors getPieceBlob — lazy-loaded only when the score view / score-derived
+ * timeline is needed.
+ */
+async function getPieceMusicXmlBlob(id) {
+  const db = await openDb();
+  const rec = await awaitRequest(piecesStore(db, 'readonly').get(id));
+  return rec ? rec.musicXmlBlob || null : null;
 }
 
 /** Persist a single piece record. Overwrites by id. */
@@ -571,6 +588,12 @@ function metadataFromRecord(record) {
     ticksPerQuarter: record.ticksPerQuarter,
     noteCount: record.noteCount,
     addedAt: record.addedAt,
+    // 'midi' (default) or 'musicxml' — drives lazy-load + default view.
+    source: record.source || 'midi',
+    // True when an engraved score is attached, so the UI can show the sheet
+    // view by default. Derived from the blob's presence; the blob itself is
+    // dropped here (lazy-loaded on demand via getPieceMusicXmlBlob).
+    hasScore: !!record.musicXmlBlob,
   };
 }
 
@@ -579,8 +602,8 @@ function metadataFromRecord(record) {
  * `addedAt` is auto-filled if missing so that re-saves from older records
  * (which never had the field) still get a stable timestamp.
  */
-function pieceToRecord(piece, midiBlob) {
-  return {
+function pieceToRecord(piece, midiBlob, musicXmlBlob) {
+  const record = {
     id: piece.id,
     title: piece.title,
     durationSec:
@@ -589,8 +612,14 @@ function pieceToRecord(piece, midiBlob) {
       typeof piece.ticksPerQuarter === 'number' ? piece.ticksPerQuarter : 480,
     noteCount: typeof piece.noteCount === 'number' ? piece.noteCount : 0,
     addedAt: typeof piece.addedAt === 'number' ? piece.addedAt : Date.now(),
-    midiBlob,
+    // Which blob is the source of truth for the note timeline. A score-backed
+    // piece may have no midiBlob at all.
+    source: piece.source === 'musicxml' ? 'musicxml' : 'midi',
+    midiBlob: midiBlob || null,
   };
+  // Optional engraved-score text (plain score.xml), only when attached.
+  if (musicXmlBlob) record.musicXmlBlob = musicXmlBlob;
+  return record;
 }
 
 /**
@@ -820,10 +849,15 @@ async function exportLibrary() {
       ticksPerQuarter: rec.ticksPerQuarter,
       noteCount: rec.noteCount,
       addedAt: rec.addedAt,
+      source: rec.source || 'midi',
     };
     if (rec.midiBlob) {
       const buf = await blobToArrayBuffer(rec.midiBlob);
       entry.midiBase64 = arrayBufferToBase64(buf);
+    }
+    if (rec.musicXmlBlob) {
+      const buf = await blobToArrayBuffer(rec.musicXmlBlob);
+      entry.musicXmlBase64 = arrayBufferToBase64(buf);
     }
     piecesOut.push(entry);
   }
@@ -915,6 +949,12 @@ async function importLibrary(data, opts = {}) {
       const buf = base64ToArrayBuffer(p.midiBase64);
       midiBlob = new Blob([buf], { type: 'audio/midi' });
     }
+    // Reconstruct the optional MusicXML Blob the same way.
+    let musicXmlBlob = null;
+    if (typeof p.musicXmlBase64 === 'string' && p.musicXmlBase64.length > 0) {
+      const buf = base64ToArrayBuffer(p.musicXmlBase64);
+      musicXmlBlob = new Blob([buf], { type: 'application/xml' });
+    }
 
     const record = {
       id: newId,
@@ -924,8 +964,10 @@ async function importLibrary(data, opts = {}) {
         typeof p.ticksPerQuarter === 'number' ? p.ticksPerQuarter : 480,
       noteCount: typeof p.noteCount === 'number' ? p.noteCount : 0,
       addedAt: typeof p.addedAt === 'number' ? p.addedAt : Date.now(),
+      source: p.source === 'musicxml' ? 'musicxml' : 'midi',
       midiBlob,
     };
+    if (musicXmlBlob) record.musicXmlBlob = musicXmlBlob;
     await awaitRequest(
       db.transaction(STORE_PIECES, 'readwrite').objectStore(STORE_PIECES).put(record),
     );
@@ -1042,6 +1084,7 @@ if (typeof module !== 'undefined' && module.exports) {
     openDb,
     listPieceMetadata,
     getPieceBlob,
+    getPieceMusicXmlBlob,
     savePiece,
     deletePiece,
     renamePiece,

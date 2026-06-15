@@ -159,6 +159,39 @@ function buildSampleMidi() {
   );
 }
 
+// --- sectionizeByPhrase: a held note must not bloat / overlap sections ---
+{
+  // A long pedal tone ringing across the whole excerpt, over a melody dense
+  // enough to hard-split by note count. Before the clamp, the pedal's late
+  // release inflated its section's endTick so it swallowed every later phrase
+  // (notesInSection keys off onset) — double-counting notes.
+  const notes = [{ midi: 36, startTick: 0, endTick: 4000, startSec: 0, endSec: 4 }];
+  for (let i = 0; i < 8; i++) {
+    notes.push({
+      midi: 72 + (i % 3),
+      startTick: i * 120,
+      endTick: i * 120 + 60,
+      startSec: i * 0.12,
+      endSec: i * 0.12 + 0.06,
+    });
+  }
+  const secs = sectionizeByPhrase(notes, 480, {
+    gapThreshold: 100000, // one gap-free phrase
+    minNotes: 1,
+    maxNotes: 4,
+  });
+  assert.ok(secs.length >= 2, 'long phrase hard-splits into multiple sections');
+  for (let i = 0; i + 1 < secs.length; i++) {
+    assert.ok(
+      secs[i].endTick <= secs[i + 1].startTick,
+      `section ${i} must not ring into section ${i + 1}`,
+    );
+  }
+  assert.ok(secs[0].endTick < 4000, 'held note no longer inflates the section end');
+  const counted = secs.reduce((sum, s) => sum + notesInSection(notes, s).length, 0);
+  assert.equal(counted, notes.length, 'onset partition is exact — no double-counting');
+}
+
 // --- makeDerivedRanges: transition pairs + doubling run-throughs --------
 {
   /** Fabricate n contiguous phrase ranges of `noteCount` 1 for span tests. */

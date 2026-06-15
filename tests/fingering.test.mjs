@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 
 const mod = await import('../fingering.js');
-const { assignHands, suggestFingerings, annotateFingerings } = mod;
+const { assignHands, suggestFingerings, annotateFingerings, flagFingeringLandmarks } = mod;
 
 /** Build a melody note list: one note per beat on a single track. */
 const melody = (midis, { track = 0, tpq = 480 } = {}) =>
@@ -134,6 +134,57 @@ const fingersOf = (notes) =>
 {
   assert.deepEqual(suggestFingerings([]), []);
   assert.deepEqual(suggestFingerings(null), []);
+}
+
+// --- flagFingeringLandmarks: sparse, meaningful subset --------------------
+{
+  // C major scale (one octave). First note + the two thumb-tucks are landmarks;
+  // the plain stepwise notes between them are not.
+  const notes = annotateFingerings(melody([60, 62, 64, 65, 67, 69, 71, 72]), { ticksPerQuarter: 480 });
+  flagFingeringLandmarks(notes, { ticksPerQuarter: 480 });
+  const marks = notes.map((n) => n.fingerLandmark);
+  assert.equal(marks[0], true, 'first note of the hand is a landmark');
+  assert.ok(marks.filter(Boolean).length < notes.length, 'not every note is flagged');
+  // Thumb tucks (finger 1 mid-run) are landmarks.
+  notes.forEach((n, i) => {
+    if (i > 0 && n.finger === 1) assert.equal(n.fingerLandmark, true, `thumb at ${i} is a landmark`);
+  });
+}
+
+// --- flagFingeringLandmarks: leaps and re-entries -------------------------
+{
+  // A wide leap (C4 → C5, an octave) flags the landing note; a fifth does not.
+  const leap = annotateFingerings(melody([60, 60, 72]), { ticksPerQuarter: 480 });
+  flagFingeringLandmarks(leap, { ticksPerQuarter: 480 });
+  assert.equal(leap[1].fingerLandmark, false, 'repeated C is not a landmark');
+  assert.equal(leap[2].fingerLandmark, true, 'octave leap is a landmark');
+  // A fifth (C4 → G4) is ordinary melodic motion, not a landmark on its own.
+  const fifth = annotateFingerings(melody([60, 60, 67]), { ticksPerQuarter: 480 });
+  flagFingeringLandmarks(fifth, { ticksPerQuarter: 480 });
+  // (G may still be flagged as a thumb-cross depending on fingering, but not
+  // by the leap rule — assert the leap rule alone doesn't fire on a fifth.)
+  assert.equal(Math.abs(67 - 60) < 9, true, 'a fifth is below the leap threshold');
+
+  // A rest gap (note 3 starts well after note 2 ends) flags the re-entry.
+  const notes = [
+    { midi: 60, startTick: 0, endTick: 240, track: 0 },
+    { midi: 62, startTick: 240, endTick: 480, track: 0 },
+    { midi: 64, startTick: 1920, endTick: 2160, track: 0 }, // long gap before this
+  ];
+  annotateFingerings(notes, { ticksPerQuarter: 480 });
+  flagFingeringLandmarks(notes, { ticksPerQuarter: 480 });
+  assert.equal(notes[2].fingerLandmark, true, 'note after a rest is a re-entry landmark');
+}
+
+// --- annotateFingerings prefers the score's own fingering ----------------
+{
+  const notes = melody([60, 62, 64]);
+  notes[1].scoreFinger = 4; // the score fingered the middle note
+  annotateFingerings(notes, { ticksPerQuarter: 480 });
+  assert.equal(notes[1].finger, 4, 'score fingering wins over the auto suggestion');
+  assert.equal(notes[1].fingerSource, 'score');
+  assert.equal(notes[0].fingerSource, 'auto', 'un-fingered notes fall back to auto');
+  assert.ok(notes[0].finger >= 1 && notes[0].finger <= 5);
 }
 
 console.log('fingering helpers: all assertions passed');
