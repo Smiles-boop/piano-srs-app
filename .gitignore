@@ -1,5 +1,8 @@
 # Generated bundle (optional build artifact from build.js)
 bundle.js
 
+# Local Windows shortcuts
+*.lnk
+
 # macOS
 .DS_Store

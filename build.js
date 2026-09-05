@@ -80,6 +80,9 @@ const metronomeExports = [
   'createMetronome', 'MIN_BPM', 'MAX_BPM', 'DEFAULT_BPM',
 ];
 
+// --- micpitch.js exports ---
+const micpitchExports = ['createMicPitch'];
+
 // --- player.js exports ---
 const playerExports = ['createPlayer'];
 
@@ -121,9 +124,14 @@ out += `// ===== metronome.js =====\n(function() {\n`;
 out += stripModuleSyntax(read('metronome.js'));
 out += `\n${buildExportBlock(metronomeExports)}\n})();\n\n`;
 
-// player.js — needs midi.js globals
+// micpitch.js — self-contained (mic polyphonic pitch detection)
+out += `// ===== micpitch.js =====\n(function() {\n`;
+out += stripModuleSyntax(read('micpitch.js'));
+out += `\n${buildExportBlock(micpitchExports)}\n})();\n\n`;
+
+// player.js — needs midi.js globals + micpitch.js
 out += `// ===== player.js =====\n(function() {\n`;
-out += buildImportBlock(midiExports) + '\n\n';
+out += buildImportBlock([...midiExports, ...micpitchExports]) + '\n\n';
 out += stripModuleSyntax(read('player.js'));
 out += `\n${buildExportBlock(playerExports)}\n})();\n\n`;
 

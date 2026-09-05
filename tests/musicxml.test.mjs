@@ -365,4 +365,87 @@ const rest = (dur) => `<note><rest/><duration>${dur}</duration></note>`;
   assert.equal((out.match(/<fingering>2<\/fingering>/g) || []).length, 3, 'three auto fingerings injected');
 }
 
+// --- letter markings: only on very distant landmarks ----------------------
+{
+  const xml = score(
+    `<measure number="1">${attributes(1)}${pnote('C', 4, 1)}${pnote('G', 6, 1)}${pnote('E', 4, 1)}</measure>`,
+  );
+  const { notes } = parseMusicXml(xml);
+  assert.equal(notes[1].step, 'G', 'parse records the note letter');
+
+  // Every note a landmark with a finger; only the middle one is "very distant".
+  notes.forEach((n) => { n.fingerLandmark = true; n.finger = 3; });
+  notes[1].fingerLandmarkDistant = true;
+
+  const out = injectFingerings(xml, notes);
+  // Exactly one letter marking, and it's the distant note's letter (G).
+  assert.equal((out.match(/<lyric/g) || []).length, 1, 'only the distant landmark gets a letter');
+  assert.ok(/<lyric number="1"><syllabic>single<\/syllabic><text>G<\/text><\/lyric>/.test(out));
+  // The letter sits inside the note, after its fingering notations.
+  assert.ok(/<fingering>3<\/fingering><\/technical><\/notations><lyric/.test(out));
+  // Re-parsing the injected XML is still safe — same notes.
+  assert.deepEqual(
+    parseMusicXml(out).notes.map((n) => n.midi),
+    notes.map((n) => n.midi),
+    'lyric injection does not change the parsed notes',
+  );
+}
+
+// --- a distant landmark gets its letter even when the score fingers it -----
+{
+  const fingered =
+    `<note><pitch><step>A</step><octave>5</octave></pitch><duration>1</duration>` +
+    `<notations><technical><fingering>2</fingering></technical></notations></note>`;
+  const xml = score(`<measure number="1">${attributes(1)}${fingered}</measure>`);
+  const { notes } = parseMusicXml(xml);
+  assert.equal(notes[0].scoreFinger, 2, 'score fingering captured');
+
+  notes[0].fingerLandmark = true;
+  notes[0].finger = 2;
+  notes[0].fingerLandmarkDistant = true;
+  const out = injectFingerings(xml, notes);
+  // No injected fingering (the score's own wins) but the letter is still added.
+  assert.equal((out.match(/<fingering>/g) || []).length, 1, 'score fingering not duplicated');
+  assert.ok(/<text>A<\/text>/.test(out), 'letter marking added alongside the score finger');
+}
+
+// --- key signature ---
+//
+// A notated key is the strongest signal the technique drills have, so the
+// parser has to surface <key> from the opening <attributes>.
+{
+  const withKey = score(
+    `<measure number="1"><attributes><divisions>1</divisions>`
+    + `<key><fifths>-3</fifths><mode>major</mode></key>`
+    + `<time><beats>4</beats><beat-type>4</beat-type></time></attributes>`
+    + `${note(1)}</measure>`,
+  );
+  assert.deepEqual(parseMusicXml(withKey).keySignature, { fifths: -3, mode: 'major' });
+
+  // <mode> is optional — relative-key ambiguity is resolved downstream.
+  const noMode = score(
+    `<measure number="1"><attributes><divisions>1</divisions>`
+    + `<key><fifths>2</fifths></key></attributes>${note(1)}</measure>`,
+  );
+  assert.deepEqual(parseMusicXml(noMode).keySignature, { fifths: 2, mode: undefined });
+
+  // A mid-piece key change doesn't overwrite the opening key.
+  const modulates = score(
+    `<measure number="1"><attributes><divisions>1</divisions>`
+    + `<key><fifths>0</fifths><mode>major</mode></key></attributes>${note(1)}</measure>`
+    + `<measure number="2"><attributes>`
+    + `<key><fifths>4</fifths><mode>minor</mode></key></attributes>${note(1)}</measure>`,
+  );
+  assert.equal(parseMusicXml(modulates).keySignature.fifths, 0);
+
+  // No <key> at all, and out-of-range values, yield null rather than nonsense.
+  assert.equal(parseMusicXml(score(`<measure number="1">${attributes(1)}${note(1)}</measure>`)).keySignature, null);
+  const bogus = score(
+    `<measure number="1"><attributes><divisions>1</divisions>`
+    + `<key><fifths>99</fifths></key></attributes>${note(1)}</measure>`,
+  );
+  assert.equal(parseMusicXml(bogus).keySignature, null);
+  assert.equal(parseMusicXml('').keySignature, null);
+}
+
 console.log('musicxml helpers: all assertions passed');

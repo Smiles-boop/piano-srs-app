@@ -176,6 +176,33 @@ const fingersOf = (notes) =>
   assert.equal(notes[2].fingerLandmark, true, 'note after a rest is a re-entry landmark');
 }
 
+// --- flagFingeringLandmarks: only very distant leaps are "distant" --------
+{
+  // (A leap landmark must be spaced out from the hand-entry landmark, so each
+  // case uses a held note before the leap — same shape as the test above.)
+
+  // An octave leap is a landmark, but not distant enough for a letter marking.
+  const oct = annotateFingerings(melody([60, 60, 72]), { ticksPerQuarter: 480 });
+  flagFingeringLandmarks(oct, { ticksPerQuarter: 480 });
+  assert.equal(oct[2].fingerLandmark, true, 'octave leap is a landmark');
+  assert.equal(oct[2].fingerLandmarkDistant, false, 'an octave is not "very distant"');
+
+  // 17 semitones still falls short of the 18-semitone threshold.
+  const near = annotateFingerings(melody([60, 60, 77]), { ticksPerQuarter: 480 });
+  flagFingeringLandmarks(near, { ticksPerQuarter: 480 });
+  assert.equal(near[2].fingerLandmarkDistant, false, '17 semitones is below the distant threshold');
+
+  // An octave and a half (18+) is a very distant landmark — it earns a letter.
+  const far = annotateFingerings(melody([60, 60, 84]), { ticksPerQuarter: 480 });
+  flagFingeringLandmarks(far, { ticksPerQuarter: 480 });
+  assert.equal(far[2].fingerLandmark, true, 'two-octave leap is a landmark');
+  assert.equal(far[2].fingerLandmarkDistant, true, 'two octaves is a very distant landmark');
+
+  // The hand's first note is a landmark but never "distant" (no leap into it).
+  assert.equal(far[0].fingerLandmark, true, 'hand entry is a landmark');
+  assert.equal(far[0].fingerLandmarkDistant, false, 'hand entry is not distant');
+}
+
 // --- annotateFingerings prefers the score's own fingering ----------------
 {
   const notes = melody([60, 62, 64]);

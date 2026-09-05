@@ -840,6 +840,168 @@ body {
   color: var(--accent);
 }
 
+/* Plan-a-session panel (timed sessions). Same card language as the review
+ * queue; sits directly under it on the home dashboard. */
+.session-plan-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 22px 16px 22px;
+  box-shadow: var(--shadow);
+}
+
+.session-plan-panel[hidden] {
+  display: none;
+}
+
+.session-plan-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.session-plan-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.session-plan-summary {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.session-plan-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+}
+
+.session-plan-minutes-label {
+  font-size: 14px;
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.session-plan-minutes {
+  width: 64px;
+  padding: 6px 8px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.session-plan-minutes:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.session-plan-presets {
+  display: flex;
+  gap: 6px;
+}
+
+.session-plan-preset.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.session-plan-list {
+  list-style: none;
+  margin: 0 0 12px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.session-plan-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 14px;
+  font-size: 14px;
+}
+
+.session-plan-item-info {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.session-plan-item-name {
+  font-weight: 600;
+}
+
+.session-plan-item-piece {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.session-plan-item-time {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.session-plan-item-type {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.session-plan-item-type.is-review {
+  background: var(--due-today-bg);
+  color: var(--due-today-text);
+  border-color: var(--due-today-border);
+}
+
+.session-plan-item-type.is-new {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.session-plan-note {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.session-plan-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 /* MIDI viewer */
 .viewer-midi {
   max-width: 960px;
@@ -864,6 +1026,7 @@ body {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 16px;
   padding-bottom: 12px;
@@ -881,6 +1044,72 @@ body {
   font-size: 13px;
   color: var(--text-muted);
   flex-shrink: 0;
+}
+
+/* Whole-piece actions row (Listen / Play through) under the title. Takes its
+   own line so it never fights the title + view toggle for width. */
+.piece-actions {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: -6px;
+}
+.piece-actions-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-right: 2px;
+}
+.piece-listen-btn.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+.piece-listen-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 160px;
+  min-width: 140px;
+  max-width: 320px;
+}
+.piece-listen-progress[hidden] { display: none; }
+.piece-listen-time {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.piece-listen-track {
+  flex: 1;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.piece-listen-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.12s linear;
+}
+/* While a section (or the whole piece) is being practised the practice panel
+   carries its own Listen / Stop, so the row steps aside. */
+.viewer-midi.is-practicing .piece-actions { display: none; }
+
+/* Whole-piece play-through: the practice panel without the review scaffolding
+   — no rep counter, no "Reset today", no tempo goal, no Up-next rail. */
+.practice-panel.is-piece-run .practice-compact-row,
+.practice-panel.is-piece-run .practice-secondary-actions,
+.practice-panel.is-piece-run .tempo-goal,
+.practice-panel.is-piece-run .practice-up-next {
+  display: none;
 }
 
 /* Sections panel (roadmap item 4) */
@@ -1188,6 +1417,261 @@ body {
   border-color: var(--border);
 }
 
+/* Technique drills aren't part of the piece at all — give them a filled badge
+ * so they read as a distinct category rather than another passage of music.
+ * (Only used outside the section list, e.g. the "Up next" card; inside the
+ * list the group header below carries the label.) */
+.section-kind-technique .section-list-kind-badge {
+  background: var(--accent, var(--surface-alt));
+  color: var(--surface, #fff);
+  border-color: var(--accent, var(--border));
+}
+
+/* --- Trouble spots ------------------------------------------------------ */
+
+.trouble-panel {
+  margin: 0 0 12px;
+  padding: 10px 14px 12px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.trouble-panel[hidden] {
+  display: none;
+}
+
+.trouble-panel-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.trouble-panel-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.trouble-panel-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.trouble-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Each row is its own bar chart: the fill width encodes how much of the
+ * piece's error budget this one passage is eating. */
+.trouble-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.trouble-item-bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 0;
+  border-radius: var(--radius);
+  background: var(--overdue-bg, rgba(200, 80, 80, 0.18));
+}
+
+.trouble-item.is-high .trouble-item-bar { opacity: 1; }
+.trouble-item.is-medium .trouble-item-bar { opacity: 0.62; }
+.trouble-item.is-low .trouble-item-bar { opacity: 0.34; }
+
+/* Lift the content above the bar fill. */
+.trouble-item > :not(.trouble-item-bar) {
+  position: relative;
+  z-index: 1;
+}
+
+.trouble-item-where {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.trouble-item-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--overdue-text, var(--text));
+}
+
+.trouble-item-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trouble-item-action {
+  flex: 0 0 auto;
+}
+
+/* Wrong-note tally on a section row. */
+.section-list-miss-badge {
+  display: inline-block;
+  margin-top: 4px;
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--overdue-bg, var(--surface-alt));
+  color: var(--overdue-text, var(--text-muted));
+  border: 1px solid var(--overdue-border, var(--border));
+}
+
+/* Remedial drills read as urgent rather than structural. */
+.section-list-item.section-kind-trouble {
+  border-left: 3px solid var(--overdue-text, var(--border));
+}
+
+/* --- Technique group ---------------------------------------------------- */
+
+/* Banner introducing the drills at the top of the section list. */
+.section-group-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 8px 12px;
+  list-style: none;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent, var(--border));
+  border-radius: var(--radius);
+}
+
+.section-group-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.section-group-key {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--accent, var(--surface));
+  color: var(--surface, #fff);
+}
+
+/* The spelled-out scale. Drops off first when the row gets tight — it's a
+ * helpful reference, not something the user needs to act on. */
+.section-group-scale {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.section-group-action {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+/* Drills carry the same accent edge as their header so the block reads as one
+ * unit, and stay visually distinct if the user drags them apart. */
+.section-list-item.section-kind-technique {
+  border-left: 3px solid var(--accent, var(--border));
+}
+
+@media (max-width: 620px) {
+  /* Too narrow for the scale and the button side by side — the button wins. */
+  .section-group-scale {
+    flex-basis: 100%;
+    order: 3;
+  }
+}
+
+/* Add / re-key form for the technique drills, in the sections panel header. */
+.technique-form {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* The author `display` above would otherwise beat the UA [hidden] rule. */
+.technique-form[hidden] {
+  display: none;
+}
+
+.technique-form-hint {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.technique-form-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.technique-form-grid .section-form-field {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.technique-form-preview {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.technique-form-preview-notes {
+  letter-spacing: 0.1em;
+  color: var(--text);
+}
+
+.technique-form-grid select {
+  width: 100%;
+  padding: 7px 9px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
 .section-list-rep-badge {
   display: inline-block;
   margin-top: 4px;
@@ -1343,6 +1827,143 @@ body {
 
 .practice-section-notes[hidden] {
   display: none;
+}
+
+/* --- Fingering chart (technique drills) ---------------------------------
+ * Note names across the top, one row of finger digits per hand — the line a
+ * scale book prints above the stave. Sits between the section notes and the
+ * player so it's in view while the drill runs. */
+.practice-fingering {
+  margin: 0 0 8px;
+  padding: 8px 10px 6px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent, var(--border));
+  border-radius: var(--radius);
+}
+
+.practice-fingering[hidden] {
+  display: none;
+}
+
+.practice-fingering-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-bottom: 4px;
+}
+
+.practice-fingering-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.practice-fingering-caption {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* The table scrolls sideways in its own box rather than wrapping — a fingering
+ * pattern broken across lines is unreadable. */
+.practice-fingering-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.practice-fingering-table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.practice-fingering-table th,
+.practice-fingering-table td {
+  padding: 1px 0;
+  text-align: center;
+  font-weight: 500;
+  min-width: 1.6em;
+}
+
+.practice-fingering-hand {
+  padding-right: 8px !important;
+  text-align: left !important;
+  font-size: 11px;
+  font-weight: 700 !important;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.practice-fingering-corner {
+  padding-right: 8px !important;
+}
+
+.practice-fingering-note {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.practice-fingering-finger {
+  font-size: 15px;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+/* The thumb is the crossing point — the part of a scale fingering you're
+ * really memorising — so it gets the accent. */
+.practice-fingering-finger.is-thumb {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Tonics frame each octave with a hairline on their left. */
+.practice-fingering-table.is-run td.is-tonic {
+  border-left: 1px solid var(--border);
+}
+
+.practice-fingering-table.is-run td.is-tonic:first-of-type {
+  border-left: 0;
+}
+
+/* Cadence layout: each cell stacks the chord tones over their fingers, one
+ * mini column per voice, so every finger sits directly under its note. */
+.practice-fingering-chord-label {
+  font-size: 13px;
+  font-weight: 700 !important;
+  color: var(--text-muted);
+}
+
+.practice-fingering-chord {
+  padding: 2px 8px !important;
+  vertical-align: bottom;
+}
+
+.practice-fingering-chord + .practice-fingering-chord {
+  border-left: 1px solid var(--border);
+}
+
+.practice-fingering-voice {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 1.6em;
+}
+
+/* In the section list, the compact tonic-to-tonic pattern under each drill. */
+.section-list-fingering {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 /* Compact practice row: counter + rep button side by side */
@@ -2112,6 +2733,126 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+/* --- "Up next" practice-path rail ---------------------------------------
+ * Shows the next section in the piece's practice path while the user plays,
+ * with a button to jump to it when they're done. On desktop it floats to the
+ * right of the practice column (see the grid override below); on narrow
+ * viewports it stacks under the header. */
+.practice-up-next {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px 0;
+  padding: 10px 12px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.practice-up-next[hidden] {
+  display: none;
+}
+
+.practice-up-next-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.practice-up-next-pos {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.practice-up-next-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 4px 0 2px 0;
+}
+
+.practice-up-next-name {
+  font-size: 14px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.practice-up-next-card .section-list-kind-badge {
+  margin-left: 0;
+}
+
+.practice-up-next-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.practice-up-next-progress {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.practice-up-next-done {
+  margin: 2px 0 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.practice-up-next-go {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.practice-up-next-go.is-ready {
+  box-shadow: 0 0 0 2px var(--accent-soft, transparent);
+}
+
+/* Secondary "run the whole path from here" action under the up-next card. */
+.practice-up-next-run {
+  align-self: stretch;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+/* "Practice path" launcher in the sections-panel header. */
+.start-path-btn {
+  font-weight: 600;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.start-path-btn[hidden] {
+  display: none;
+}
+
+/* Desktop: float the rail into a sticky right column beside the player. The
+ * grid is gated on .has-up-next so a hidden rail (e.g. during a guided review)
+ * collapses cleanly back to a single column instead of leaving an empty gutter. */
+@media (min-width: 880px) {
+  .viewer-midi.is-practicing.has-up-next .practice-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 250px;
+    column-gap: 18px;
+    align-items: start;
+  }
+  .viewer-midi.is-practicing.has-up-next .practice-panel > :not(.practice-up-next) {
+    grid-column: 1;
+    min-width: 0;
+  }
+  .viewer-midi.is-practicing.has-up-next .practice-up-next {
+    grid-column: 2;
+    grid-row: 1 / 1000;
+    position: sticky;
+    top: 16px;
+    margin-bottom: 0;
+  }
+}
+
 /* --- Mobile-friendly layout (roadmap item 11c) ---
  * On narrow viewports the sidebar becomes a slide-out drawer overlaying the
  * viewer, toggled by a hamburger button in the header. The drawer is hidden
@@ -2130,6 +2871,152 @@ kbd {
 }
 
 /* ===== Metronome widget (item 12b) ===== */
+
+/* --- Tempo goals --------------------------------------------------------- */
+.tempo-goal {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.tempo-goal[hidden] {
+  display: none;
+}
+
+.tempo-goal-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.tempo-goal-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tempo-goal-status {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.tempo-goal-set {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Author display rules above beat the UA [hidden] rule, so restore it
+ * explicitly for the two mode containers we toggle via the hidden attribute. */
+.tempo-goal-set[hidden],
+.tempo-goal-active[hidden] {
+  display: none;
+}
+
+.tempo-goal-set-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.tempo-goal-input {
+  width: 64px;
+  padding: 4px 6px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.tempo-goal-unit {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tempo-goal-readouts {
+  display: flex;
+  gap: 18px;
+  margin-bottom: 8px;
+}
+
+.tempo-goal-readout {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.tempo-goal-readout strong {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.tempo-goal-readout span {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tempo-goal-track {
+  height: 7px;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.tempo-goal-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+.tempo-goal-track.is-complete .tempo-goal-fill {
+  background: var(--success-text, var(--accent));
+}
+
+.tempo-goal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Per-section tempo pill in the sections list */
+.section-list-tempo {
+  display: inline-block;
+  margin-top: 4px;
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.section-list-tempo.is-reached {
+  background: var(--success-bg);
+  color: var(--success-text);
+  border-color: var(--success-text);
+}
 
 .metronome-widget {
   margin-top: 12px;
@@ -2514,9 +3401,46 @@ kbd {
 .player-keys-toggle.is-active,
 .player-listen-btn.is-active,
 .player-fingers-toggle.is-active,
+.player-guide-toggle.is-active,
 .player-peek-btn.is-active {
   background: var(--accent);
   color: var(--accent-contrast);
+}
+
+/* Per-run progress bar (resets with each attempt, unlike the reps counter). */
+.player-run-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.player-run-progress[hidden] { display: none; }
+.player-run-progress-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.player-run-progress-track {
+  flex: 1;
+  height: 5px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.player-run-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.15s ease;
+}
+.player-run-progress.is-complete .player-run-progress-track {
+  border-color: var(--complete-fill);
+  box-shadow: 0 0 0 1px var(--complete-fill);
+}
+.player-run-progress.is-reset .player-run-progress-track {
+  border-color: var(--danger-text);
+  box-shadow: 0 0 0 1px var(--danger-text);
 }
 
 /* Memory-level chip (Watch → Find → Glance → From memory) */
@@ -2630,6 +3554,10 @@ kbd {
    note when cues were hidden. */
 .player-key-white.is-reveal { background: #fbbf24; box-shadow: inset 0 0 0 2px #d97706; }
 .player-key-black.is-reveal { background: #d97706; }
+/* Keys lighting up as Listen plays them (sky, distinct from the green
+   "you played it right" flash). */
+.player-key-white.is-playing { background: #7dd3fc; }
+.player-key-black.is-playing { background: #0284c7; }
 
 @media (max-width: 640px) {
   .player-controls { gap: 6px; }
@@ -2695,3 +3623,168 @@ kbd {
    input); when Synthesia is active the sheet panel is hidden. */
 .viewer-midi.view-sheet .player-canvas { display: none; }
 .viewer-midi.view-synthesia .viewer-sheet { display: none; }
+
+/* ============================================================
+   Settings (QOL menu)
+   ============================================================ */
+
+/* Header gear button — mirrors the theme toggle, sits right after it. */
+.settings-btn {
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+  line-height: 1;
+}
+.settings-btn:hover {
+  background: var(--surface);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.settings-btn-icon { font-size: 15px; line-height: 1; }
+
+/* The dialog itself. */
+.settings-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(80vh, 760px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
+  overflow: hidden;
+}
+.settings-dialog::backdrop {
+  background: rgba(15, 14, 12, 0.5);
+  backdrop-filter: blur(2px);
+}
+.settings-form { display: flex; flex-direction: column; max-height: inherit; }
+
+.settings-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.settings-dialog-title { margin: 0; font-size: 17px; font-weight: 600; }
+.settings-close-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: var(--radius);
+}
+.settings-close-btn:hover { color: var(--text); }
+
+.settings-body {
+  padding: 8px 20px 4px;
+  overflow-y: auto;
+}
+
+.settings-group {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0;
+  padding: 10px 0 6px;
+}
+.settings-group:first-child { border-top: none; }
+.settings-group-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 0;
+  margin-bottom: 4px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 0;
+  cursor: pointer;
+}
+.settings-row + .settings-row { border-top: 1px solid var(--surface-alt); }
+.settings-row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.settings-row-label { font-size: 14px; color: var(--text); }
+.settings-row-hint { font-size: 12px; color: var(--text-muted); line-height: 1.35; }
+.settings-row-hint kbd {
+  font-family: inherit;
+  font-size: 11px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.settings-select {
+  flex-shrink: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.settings-select:hover { border-color: var(--accent); }
+
+/* Bigger, theme-aware checkbox. */
+.settings-checkbox {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  margin: 0;
+}
+
+.settings-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+/* C-key orientation tint (opt-in). Uses box-shadow so it composes with the
+   note-state background colors instead of being overwritten by them. */
+.player-key-white.is-c {
+  box-shadow: inset 0 0 0 9999px rgba(106, 75, 42, 0.12);
+}
+html.dark .player-key-white.is-c {
+  box-shadow: inset 0 0 0 9999px rgba(201, 168, 122, 0.16);
+}
+
+/* Reduce motion: kill transitions/animations app-wide when the user asks
+   (the falling-note easing is handled in player.js). */
+html.reduce-motion * {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
+@media (max-width: 640px) {
+  .settings-btn-label { display: none; }
+  .settings-row { align-items: flex-start; }
+}

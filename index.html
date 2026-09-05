@@ -22,6 +22,10 @@
       <span class="theme-toggle-icon" aria-hidden="true">&#9790;</span>
       <span class="theme-toggle-label">Dark</span>
     </button>
+    <button id="settings-btn" class="settings-btn" type="button" aria-label="Open settings" aria-haspopup="dialog">
+      <span class="settings-btn-icon" aria-hidden="true">&#9881;</span>
+      <span class="settings-btn-label">Settings</span>
+    </button>
   </header>
 
   <main class="app-main">
@@ -41,6 +45,9 @@
           aria-hidden="true"
           tabindex="-1"
         />
+        <button id="load-library-btn" class="btn btn-sm" type="button">
+          Load curated library
+        </button>
       </div>
       <ul id="piece-list" class="piece-list" aria-live="polite">
         <li class="piece-list-empty">
@@ -199,6 +206,45 @@
           ></ul>
         </section>
         <section
+          id="session-plan-panel"
+          class="session-plan-panel"
+          aria-label="Plan a timed practice session"
+          hidden
+        >
+          <header class="session-plan-header">
+            <h2>Plan a session</h2>
+            <span id="session-plan-summary" class="session-plan-summary"></span>
+          </header>
+          <div class="session-plan-controls">
+            <label class="session-plan-minutes-label" for="session-plan-minutes">
+              I have
+              <input
+                id="session-plan-minutes"
+                class="session-plan-minutes"
+                type="number"
+                min="5"
+                max="240"
+                step="5"
+                inputmode="numeric"
+              />
+              minutes
+            </label>
+            <div class="session-plan-presets" role="group" aria-label="Quick session lengths">
+              <button class="btn btn-sm session-plan-preset" type="button" data-minutes="15">15m</button>
+              <button class="btn btn-sm session-plan-preset" type="button" data-minutes="30">30m</button>
+              <button class="btn btn-sm session-plan-preset" type="button" data-minutes="45">45m</button>
+              <button class="btn btn-sm session-plan-preset" type="button" data-minutes="60">60m</button>
+            </div>
+          </div>
+          <ul id="session-plan-list" class="session-plan-list" aria-live="polite"></ul>
+          <p id="session-plan-note" class="session-plan-note" hidden></p>
+          <div class="session-plan-actions">
+            <button id="start-session-plan-btn" class="btn btn-primary" type="button">
+              ▶ Start session
+            </button>
+          </div>
+        </section>
+        <section
           id="continue-panel"
           class="continue-panel"
           aria-label="Recently practiced sections"
@@ -239,6 +285,24 @@
             <button id="view-sheet-btn" class="viewer-view-btn" type="button">Sheet</button>
             <button id="view-synthesia-btn" class="viewer-view-btn" type="button">Synthesia</button>
           </div>
+          <!-- Whole-piece actions: hear the entire piece (the score cursor
+               follows along) or play it through end to end in a free run —
+               wrong notes are counted, not punished, and nothing is banked
+               toward the section reviews. Hidden while a section is being
+               practised (the practice panel has its own Listen). -->
+          <div id="piece-actions" class="piece-actions" role="group" aria-label="Whole piece">
+            <span class="piece-actions-label">Whole piece</span>
+            <button id="piece-listen-btn" class="btn btn-sm piece-listen-btn" type="button" aria-pressed="false" title="Hear the whole piece — the score cursor follows along">
+              ▶ Listen
+            </button>
+            <button id="piece-play-btn" class="btn btn-sm btn-practice piece-play-btn" type="button" title="Play the whole piece through, start to finish — wrong notes are counted, not punished">
+              🎹 Play through
+            </button>
+            <span id="piece-listen-progress" class="piece-listen-progress" hidden>
+              <span id="piece-listen-time" class="piece-listen-time" aria-live="off">0:00 / 0:00</span>
+              <span class="piece-listen-track" aria-hidden="true"><span id="piece-listen-fill" class="piece-listen-fill"></span></span>
+            </span>
+          </div>
         </header>
 
         <!-- Engraved score (OpenSheetMusicDisplay renders here). -->
@@ -248,10 +312,47 @@
           <header class="sections-panel-header">
             <h3>Sections</h3>
             <span class="sections-panel-hint">Auto-split into phrases</span>
+            <button id="start-path-btn" class="btn btn-sm start-path-btn" type="button" hidden>
+              ▶ Practice path
+            </button>
+            <button id="technique-btn" class="btn btn-sm" type="button" hidden>
+              ♪ Technique
+            </button>
             <button id="resplit-sections-btn" class="btn btn-sm" type="button">
               Re-split
             </button>
           </header>
+
+          <!-- Scale / arpeggio / cadence drills in the piece's key. The key is
+               detected on import (or read from the score's key signature), but
+               modal and chromatic pieces are genuinely ambiguous, so it stays
+               editable here. Re-keying rebuilds only the technique sections. -->
+          <form id="technique-form" class="technique-form" hidden novalidate>
+            <h4 class="section-form-title">Technique drills</h4>
+            <p id="technique-form-hint" class="technique-form-hint"></p>
+            <div class="technique-form-grid">
+              <label class="section-form-field">
+                <span class="section-form-label">Key</span>
+                <select id="technique-tonic-input"></select>
+              </label>
+              <label class="section-form-field">
+                <span class="section-form-label">Mode</span>
+                <select id="technique-mode-input">
+                  <option value="major">major</option>
+                  <option value="minor">minor (harmonic)</option>
+                </select>
+              </label>
+            </div>
+            <p id="technique-form-preview" class="technique-form-preview" aria-live="polite"></p>
+            <div class="section-form-actions">
+              <button id="technique-form-submit" type="submit" class="btn btn-primary">
+                Add drills
+              </button>
+              <button id="technique-form-cancel" type="button" class="btn">
+                Cancel
+              </button>
+            </div>
+          </form>
 
           <!-- Edit-only form: a section's note range is assigned automatically,
                so the form only edits its name and practice notes. -->
@@ -300,6 +401,19 @@
             </div>
           </form>
 
+          <!-- Where the wrong notes actually happen. Filled by renderTroublePanel;
+               hidden until enough mistakes have been logged to be meaningful. -->
+          <section id="trouble-panel" class="trouble-panel" hidden>
+            <header class="trouble-panel-header">
+              <h4 class="trouble-panel-title">Trouble spots</h4>
+              <span id="trouble-panel-summary" class="trouble-panel-summary"></span>
+              <button id="trouble-clear-btn" class="btn btn-sm" type="button">
+                Reset
+              </button>
+            </header>
+            <ul id="trouble-list" class="trouble-list"></ul>
+          </section>
+
           <ul
             id="section-list"
             class="section-list"
@@ -315,7 +429,7 @@
         >
           <header class="practice-panel-header">
             <div class="practice-panel-headings">
-              <span class="practice-panel-eyebrow">Practicing</span>
+              <span id="practice-eyebrow" class="practice-panel-eyebrow">Practicing</span>
               <h3 id="practice-section-name" class="practice-section-name"></h3>
               <span id="practice-section-meta" class="practice-section-meta"></span>
             </div>
@@ -328,7 +442,25 @@
               Stop
             </button>
           </header>
+
+          <aside
+            id="practice-up-next"
+            class="practice-up-next"
+            aria-label="Up next in this piece"
+            hidden
+          ></aside>
+
           <p id="practice-section-notes" class="practice-section-notes" hidden></p>
+
+          <!-- Fingering chart for technique drills — the whole pattern at a
+               glance, laid out by showPracticePanel. Hidden for ordinary
+               sections, whose fingerings live on the score / falling notes. -->
+          <section
+            id="practice-fingering"
+            class="practice-fingering"
+            aria-label="Fingering"
+            hidden
+          ></section>
 
           <div id="review-session-bar" class="review-session-bar" hidden>
             <span id="review-session-progress" class="review-session-progress"></span>
@@ -337,7 +469,7 @@
             </button>
           </div>
 
-          <div class="practice-compact-row">
+          <div id="practice-compact-row" class="practice-compact-row">
             <div class="practice-counter" aria-live="polite">
               <span id="practice-count" class="practice-count">0</span>
               <span class="practice-count-divider">/</span>
@@ -390,7 +522,7 @@
             hidden
           ></p>
 
-          <div class="practice-secondary-actions">
+          <div id="practice-secondary-actions" class="practice-secondary-actions">
             <button
               id="practice-reset-btn"
               type="button"
@@ -399,6 +531,71 @@
               Reset today
             </button>
           </div>
+          <section id="practice-tempo-goal" class="tempo-goal" aria-label="Tempo goal" hidden>
+            <header class="tempo-goal-header">
+              <h4 class="tempo-goal-title">Tempo goal</h4>
+              <span id="tempo-goal-status" class="tempo-goal-status"></span>
+            </header>
+
+            <!-- Mode A: no goal set yet (also shown while editing). -->
+            <div id="tempo-goal-set" class="tempo-goal-set">
+              <label class="tempo-goal-set-label">
+                Target
+                <input
+                  id="tempo-goal-input"
+                  class="tempo-goal-input"
+                  type="number"
+                  min="30"
+                  max="300"
+                  step="1"
+                  inputmode="numeric"
+                  aria-label="Target tempo in BPM"
+                />
+                <span class="tempo-goal-unit">BPM</span>
+              </label>
+              <button id="tempo-goal-set-btn" class="btn btn-sm" type="button">
+                Set goal
+              </button>
+              <button id="tempo-goal-cancel-btn" class="btn btn-sm btn-link" type="button" hidden>
+                Cancel
+              </button>
+            </div>
+
+            <!-- Mode B: a goal exists. -->
+            <div id="tempo-goal-active" class="tempo-goal-active" hidden>
+              <div class="tempo-goal-readouts">
+                <span class="tempo-goal-readout">
+                  <strong id="tempo-goal-working">—</strong><span>working</span>
+                </span>
+                <span class="tempo-goal-readout">
+                  <strong id="tempo-goal-best">—</strong><span>best clean</span>
+                </span>
+                <span class="tempo-goal-readout">
+                  <strong id="tempo-goal-target">—</strong><span>goal</span>
+                </span>
+              </div>
+              <div
+                id="tempo-goal-track"
+                class="tempo-goal-track"
+                role="progressbar"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow="0"
+                aria-label="Tempo goal progress"
+              >
+                <div id="tempo-goal-fill" class="tempo-goal-fill"></div>
+              </div>
+              <div class="tempo-goal-actions">
+                <button id="tempo-goal-bump-btn" class="btn btn-sm" type="button">
+                  Bump +5
+                </button>
+                <button id="tempo-goal-edit-btn" class="btn btn-sm btn-link" type="button">
+                  Edit goal
+                </button>
+              </div>
+            </div>
+          </section>
+
           <section id="metronome-widget" class="metronome-widget" aria-label="Metronome">
             <header class="metronome-header">
               <button id="metronome-collapse-btn" class="metronome-collapse-btn" type="button" aria-expanded="false" aria-label="Toggle metronome">
@@ -454,12 +651,155 @@
 
   <footer class="app-footer">
     <span id="app-status">Ready</span>
-    <span class="app-version">v0.22.0 &middot; midi</span>
+    <span class="app-version">v0.23.0 &middot; midi</span>
   </footer>
+
+  <!-- Settings (QOL toggles). Native <dialog> for free Esc-to-close, backdrop,
+       and focus handling. Controls are wired in app.js (see setupSettings). -->
+  <dialog id="settings-dialog" class="settings-dialog" aria-label="Settings">
+    <form method="dialog" class="settings-form">
+      <header class="settings-dialog-header">
+        <h2 class="settings-dialog-title">Settings</h2>
+        <button id="settings-close-btn" class="settings-close-btn" type="button" aria-label="Close settings">&times;</button>
+      </header>
+
+      <div class="settings-body">
+        <fieldset class="settings-group">
+          <legend class="settings-group-title">Reading aids</legend>
+
+          <label class="settings-row">
+            <span class="settings-row-text">
+              <span class="settings-row-label">Note names on keys</span>
+              <span class="settings-row-hint">Letter labels on the on-screen keyboard.</span>
+            </span>
+            <select id="set-keyNoteNames" class="settings-select">
+              <option value="off">Off</option>
+              <option value="c">C keys only</option>
+              <option value="all">All white keys</option>
+            </select>
+          </label>
+
+          <label class="settings-row">
+            <span class="settings-row-text">
+              <span class="settings-row-label">Notation</span>
+              <span class="settings-row-hint">How note names are spelled everywhere.</span>
+            </span>
+            <select id="set-notation" class="settings-select">
+              <option value="letters">Letters (C D E)</option>
+              <option value="solfege">Solfège (Do Re Mi)</option>
+              <option value="german">German (… A B H)</option>
+            </select>
+          </label>
+
+          <label class="settings-row">
+            <span class="settings-row-text">
+              <span class="settings-row-label">Show octave numbers</span>
+              <span class="settings-row-hint">Append the octave, e.g. C4.</span>
+            </span>
+            <input id="set-octaveNumbers" class="settings-checkbox" type="checkbox" />
+          </label>
+
+          <label class="settings-row">
+            <span class="settings-row-text">
+              <span class="settings-row-label">Note names on falling notes</span>
+              <span class="settings-row-hint">Print the letter on each note in the Synthesia view.</span>
+            </span>
+            <input id="set-fallingNoteNames" class="settings-checkbox" type="checkbox" />
+          </label>
+
+          <label class="settings-row">
+            <span class="settings-row-text">
+              <span class="settings-row-label">Highlight C keys</span>
+              <span class="settings-row-hint">Tint every C for quick orientation. (Hover any key for its name.)</span>
+            </span>
+            <input id="set-highlightC" class="settings-checkbox" type="checkbox" />
+          </label>
+        </fieldset>
+
+        <fieldset class="settings-group">
+          <legend class="settings-group-title">Practice view</legend>
+
+          <label class="settings-row">
+            <span class="settings-row-text">
+              <span class="settings-row-label">Suggested fingerings</span>
+              <span class="settings-row-hint">Show finger numbers (1–5) on the falling notes.</span>
+            </span>
+            <input id="set-showFingerings" class="settings-checkbox" type="checkbox" />
+          </label>
+
+          <label class="settings-row">
+            <span class="settings-row-text">
+              <span class="settings-row-label">Guide keys by default</span>
+              <span class="settings-row-hint">Light the next keys when a section opens. (Counts guided runs as half a rep at memory stages.)</span>
+            </span>
+            <input id="set-guideKeysDefault" class="settings-checkbox" type="checkbox" />
+          </label>
+
+          <label class="settings-row">
+            <span class="settings-row-text">
+              <span class="settings-row-label">Reduce motion</span>
+              <span class="settings-row-hint">Snap the notes instead of animating; calms transitions.</span>
+            </span>
+            <input id="set-reduceMotion" class="settings-checkbox" type="checkbox" />
+          </label>
+        </fieldset>
+
+        <fieldset class="settings-group">
+          <legend class="settings-group-title">Input &amp; feedback</legend>
+
+          <label class="settings-row">
+            <span class="settings-row-text">
+              <span class="settings-row-label">Default hand</span>
+              <span class="settings-row-hint">Which hand a section opens on.</span>
+            </span>
+            <select id="set-defaultHand" class="settings-select">
+              <option value="both">Both hands</option>
+              <option value="rh">Right hand</option>
+              <option value="lh">Left hand</option>
+            </select>
+          </label>
+
+          <label class="settings-row">
+            <span class="settings-row-text">
+              <span class="settings-row-label">Computer keyboard input</span>
+              <span class="settings-row-hint">Arm the A…' typing keys automatically on open.</span>
+            </span>
+            <input id="set-computerKeysDefault" class="settings-checkbox" type="checkbox" />
+          </label>
+
+          <label class="settings-row">
+            <span class="settings-row-text">
+              <span class="settings-row-label">Note sound</span>
+              <span class="settings-row-hint">Click when you play an on-screen or typed key.</span>
+            </span>
+            <input id="set-noteSound" class="settings-checkbox" type="checkbox" />
+          </label>
+        </fieldset>
+
+        <fieldset class="settings-group">
+          <legend class="settings-group-title">Appearance</legend>
+
+          <label class="settings-row">
+            <span class="settings-row-text">
+              <span class="settings-row-label">Dark mode</span>
+              <span class="settings-row-hint">Also toggleable from the header or the <kbd>D</kbd> key.</span>
+            </span>
+            <input id="set-darkMode" class="settings-checkbox" type="checkbox" />
+          </label>
+        </fieldset>
+      </div>
+
+      <footer class="settings-dialog-footer">
+        <button id="settings-reset-btn" class="btn btn-sm" type="button">Reset to defaults</button>
+        <button class="btn btn-primary" type="button" id="settings-done-btn">Done</button>
+      </footer>
+    </form>
+  </dialog>
 
   <!-- Load as classic scripts (not modules) so the app works from file://
        without a local server. Order matters: db → srs → midi → fingering →
-       musicxml → metronome → player → app. -->
+       musicxml → metronome → playback → player → app. -->
+  <script src="settings.js"></script>
   <script src="db.js"></script>
   <script src="srs.js"></script>
   <script src="midi.js"></script>
@@ -470,7 +810,15 @@
   <script src="vendor/opensheetmusicdisplay.min.js"></script>
   <script src="sheet.js"></script>
   <script src="metronome.js"></script>
+  <script src="tempo.js"></script>
+  <script src="technique.js"></script>
+  <script src="trouble.js"></script>
+  <script src="micpitch.js"></script>
+  <script src="playback.js"></script>
   <script src="player.js"></script>
+  <!-- Embedded base64 of the curated MusicXML library, so it can be loaded
+       without fetch() (which Chrome blocks on file://). -->
+  <script src="library-data.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

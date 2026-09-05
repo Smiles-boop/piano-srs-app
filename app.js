@@ -73,13 +73,14 @@
 // Dependencies loaded via classic <script> tags in index.html (db.js,
 // srs.js, metronome.js) — all symbols are available as globals.
 
-const APP_VERSION = '0.22.0'; // Home dashboard: forecast, goal ring, guided review
+const APP_VERSION = '0.23.0'; // Whole-piece Listen + Play through on the piece page
 
 const els = {
   status: document.getElementById('app-status'),
   addPieceBtn: document.getElementById('add-piece-btn'),
   fileInput: document.getElementById('midi-file-input'),
   loadSampleBtn: document.getElementById('load-sample-btn'),
+  loadLibraryBtn: document.getElementById('load-library-btn'),
   pieceList: document.getElementById('piece-list'),
   viewerPlaceholder: document.getElementById('viewer-placeholder'),
   viewerMidi: document.getElementById('viewer-midi'),
@@ -90,9 +91,29 @@ const els = {
   viewToggle: document.getElementById('viewer-view-toggle'),
   viewSheetBtn: document.getElementById('view-sheet-btn'),
   viewSynthesiaBtn: document.getElementById('view-synthesia-btn'),
+  // Whole-piece actions (Listen / Play through) in the piece header
+  pieceActions: document.getElementById('piece-actions'),
+  pieceListenBtn: document.getElementById('piece-listen-btn'),
+  piecePlayBtn: document.getElementById('piece-play-btn'),
+  pieceListenProgress: document.getElementById('piece-listen-progress'),
+  pieceListenTime: document.getElementById('piece-listen-time'),
+  pieceListenFill: document.getElementById('piece-listen-fill'),
   // Sections panel
   sectionsPanel: document.getElementById('sections-panel'),
   resplitBtn: document.getElementById('resplit-sections-btn'),
+  startPathBtn: document.getElementById('start-path-btn'),
+  troublePanel: document.getElementById('trouble-panel'),
+  troubleList: document.getElementById('trouble-list'),
+  troubleSummary: document.getElementById('trouble-panel-summary'),
+  troubleClearBtn: document.getElementById('trouble-clear-btn'),
+  techniqueBtn: document.getElementById('technique-btn'),
+  techniqueForm: document.getElementById('technique-form'),
+  techniqueFormHint: document.getElementById('technique-form-hint'),
+  techniqueTonicInput: document.getElementById('technique-tonic-input'),
+  techniqueModeInput: document.getElementById('technique-mode-input'),
+  techniqueFormPreview: document.getElementById('technique-form-preview'),
+  techniqueFormSubmit: document.getElementById('technique-form-submit'),
+  techniqueFormCancel: document.getElementById('technique-form-cancel'),
   sectionForm: document.getElementById('section-form'),
   sectionFormTitle: document.getElementById('section-form-title'),
   sectionNameInput: document.getElementById('section-name-input'),
@@ -103,9 +124,12 @@ const els = {
   sectionList: document.getElementById('section-list'),
   // Practice panel
   practicePanel: document.getElementById('practice-panel'),
+  practiceEyebrow: document.getElementById('practice-eyebrow'),
   practiceSectionName: document.getElementById('practice-section-name'),
   practiceSectionMeta: document.getElementById('practice-section-meta'),
   practiceSectionNotes: document.getElementById('practice-section-notes'),
+  practiceFingering: document.getElementById('practice-fingering'),
+  practiceUpNext: document.getElementById('practice-up-next'),
   practiceCount: document.getElementById('practice-count'),
   practiceGoal: document.getElementById('practice-goal'),
   practiceProgressTrack: document.getElementById('practice-progress-track'),
@@ -173,6 +197,13 @@ const els = {
   // Continue-practicing panel (home dashboard)
   continuePanel: document.getElementById('continue-panel'),
   continueList: document.getElementById('continue-list'),
+  // Plan-a-session panel (home dashboard)
+  sessionPlanPanel: document.getElementById('session-plan-panel'),
+  sessionPlanSummary: document.getElementById('session-plan-summary'),
+  sessionPlanMinutes: document.getElementById('session-plan-minutes'),
+  sessionPlanList: document.getElementById('session-plan-list'),
+  sessionPlanNote: document.getElementById('session-plan-note'),
+  startSessionPlanBtn: document.getElementById('start-session-plan-btn'),
   // Guided review-session bar (practice panel)
   reviewSessionBar: document.getElementById('review-session-bar'),
   reviewSessionProgress: document.getElementById('review-session-progress'),
@@ -191,6 +222,21 @@ const els = {
   metronomeBeatIndicator: document.getElementById('metronome-beat-indicator'),
   metronomeCollapseBtn: document.getElementById('metronome-collapse-btn'),
   metronomeBody: document.getElementById('metronome-body'),
+  // Tempo goals
+  tempoGoal: document.getElementById('practice-tempo-goal'),
+  tempoGoalStatus: document.getElementById('tempo-goal-status'),
+  tempoGoalSet: document.getElementById('tempo-goal-set'),
+  tempoGoalInput: document.getElementById('tempo-goal-input'),
+  tempoGoalSetBtn: document.getElementById('tempo-goal-set-btn'),
+  tempoGoalCancelBtn: document.getElementById('tempo-goal-cancel-btn'),
+  tempoGoalActive: document.getElementById('tempo-goal-active'),
+  tempoGoalWorking: document.getElementById('tempo-goal-working'),
+  tempoGoalBest: document.getElementById('tempo-goal-best'),
+  tempoGoalTarget: document.getElementById('tempo-goal-target'),
+  tempoGoalTrack: document.getElementById('tempo-goal-track'),
+  tempoGoalFill: document.getElementById('tempo-goal-fill'),
+  tempoGoalBumpBtn: document.getElementById('tempo-goal-bump-btn'),
+  tempoGoalEditBtn: document.getElementById('tempo-goal-edit-btn'),
 };
 
 /**
@@ -247,7 +293,15 @@ let sectionFormState = null;
  *     timerStartedAt: number,  // Date.now() when session opened
  *     timerElapsed: number,    // accumulated ms (for pause/resume)
  *     timerPaused: boolean,    // true when timer is paused
+ *     mode?: 'piece',          // whole-piece play-through (see openPieceRun)
+ *     section?: object,        // the synthetic whole-piece section (mode 'piece')
+ *     runs?: number,           // play-throughs completed this session (mode 'piece')
+ *     bestSlips?: number|null, // fewest wrong notes in one play-through (mode 'piece')
  *   }
+ *
+ * A whole-piece play-through reuses the panel + engine but banks nothing: no
+ * rep logs, no SM-2, no practice-time / tempo writes (its `sectionId` is the
+ * sentinel PIECE_RUN_ID, which matches no stored section).
  *
  * `count` is the in-memory mirror of today's persisted count for the active
  * section. We update it optimistically on each rep click so the UI stays
@@ -259,6 +313,17 @@ let sectionFormState = null;
  * twice for the same session.
  */
 let practiceState = null;
+
+/** Sentinel sectionId for a whole-piece play-through (never a stored id). */
+const PIECE_RUN_ID = '__piece_run__';
+
+/**
+ * Whole-piece "Listen" from the piece page — a playback.js engine that walks
+ * the score cursor along while it plays. Lazily created; independent of the
+ * practice player so it doesn't need the practice panel to be open.
+ * @type {ReturnType<typeof createPiecePlayback> | null}
+ */
+let piecePlayback = null;
 
 /** Interval handle for the practice timer tick. */
 let practiceTimerInterval = null;
@@ -272,6 +337,13 @@ let metronome = null;
 
 /** Flash timeout handle for the beat indicator. */
 let beatFlashTimeout = null;
+
+/**
+ * When true, the tempo-goal card shows its "set target" input even though a
+ * goal already exists (the user tapped "Edit goal"). Reset whenever a new
+ * section's practice view opens.
+ */
+let tempoGoalEditing = false;
 
 /**
  * Rep counts for the active piece's sections, keyed by sectionId. Populated
@@ -335,6 +407,25 @@ const DAILY_GOAL_KEY = 'pianoSrsDailyGoal';
  * whatever is due today). Read once at startup; mutated by the +/- controls.
  */
 let dailyGoal = readDailyGoal();
+
+/** localStorage key for the planned-session length (minutes). */
+const SESSION_MINUTES_KEY = 'pianoSrsSessionMinutes';
+
+/** Bounds + default for the "I have N minutes" input. */
+const SESSION_MINUTES_MIN = 5;
+const SESSION_MINUTES_MAX = 240;
+const SESSION_MINUTES_DEFAULT = 30;
+
+/** The user's chosen session length, persisted across visits. */
+let sessionPlanMinutes = readSessionPlanMinutes();
+
+/**
+ * Lifetime rep totals by sectionId — feeds the per-section time estimates in
+ * the session planner (avg ms/rep × rep goal). Hydrated alongside the review
+ * queue; empty until then, which just means the planner uses its flat
+ * fallback estimates.
+ */
+let lifetimeRepTotals = new Map();
 
 /** Set the small status line in the footer. */
 function setStatus(message) {
@@ -434,9 +525,14 @@ async function handleDeletePiece(pieceId, title) {
     const sections = await listSectionsForPiece(pieceId);
     const sectionIds = sections.map((s) => s.id);
 
-    // Cascade: rep logs → sections → piece.
+    // Cascade: rep logs → mistake tallies → sections → piece.
     if (sectionIds.length > 0) {
       await deleteRepLogsForSections(sectionIds);
+    }
+    try {
+      await deleteMistakesForPiece(pieceId);
+    } catch (err) {
+      console.warn('Could not clear mistake history for deleted piece', err);
     }
     await deleteSectionsForPiece(pieceId);
     await deletePiece(pieceId);
@@ -444,6 +540,7 @@ async function handleDeletePiece(pieceId, title) {
     // Remove from in-memory array.
     const idx = pieces.findIndex((p) => p.id === pieceId);
     if (idx !== -1) pieces.splice(idx, 1);
+    if (activePieceId === pieceId) mistakeRecords = [];
 
     // If the deleted piece was active, clear the viewer back to the welcome
     // placeholder.
@@ -560,6 +657,15 @@ function formatPieceMeta(piece) {
 function formatSectionMeta(section) {
   const n = section.noteCount || 0;
   const noteStr = n === 1 ? '1 note' : `${n} notes`;
+  // A technique drill isn't located anywhere in the piece, so a timestamp
+  // range would be actively misleading — describe the drill instead.
+  if (section.kind === 'technique' && section.technique) {
+    const t = section.technique;
+    const shape = t.drill === 'cadence'
+      ? 'both hands'
+      : `${t.octaves || TECHNIQUE_OCTAVES} octaves · hands together`;
+    return `${noteStr} · ${shape}`;
+  }
   return `${noteStr} · ${formatClock(section.startSec)}–${formatClock(section.endSec)}`;
 }
 
@@ -598,6 +704,22 @@ async function buildSectionsForPiece(piece) {
   // fluency too: overlapping transition pairs for every boundary, then
   // doubling run-throughs up to the full piece.
   ranges.push(...makeDerivedRanges(ranges));
+  // Then the technique drills — scale, arpeggio and cadence in the piece's own
+  // key. These carry a generated note set rather than a window into the piece,
+  // so they sit outside the tick-range scheme entirely (see technique.js).
+  //
+  // They go at the FRONT: they're the warm-up, and the practice path opens with
+  // them. `order` below is the array index, so position here is the stored
+  // order — the user can still drag them elsewhere afterwards.
+  const key = resolveKey({
+    notes: piece.notes,
+    keySignature: piece.keySignature || null,
+    ticksPerQuarter: piece.ticksPerQuarter,
+  });
+  if (key) {
+    piece.key = key;
+    ranges.unshift(...techniqueSpecsForKey(key, 0));
+  }
   const now = Date.now();
   const records = [];
   ranges.forEach((range, i) => {
@@ -612,6 +734,7 @@ async function buildSectionsForPiece(piece) {
       noteCount: range.noteCount,
       notes: range.notes || '',
       kind: range.kind,
+      technique: range.technique,
       addedAt: now + i, // slight offset keeps order deterministic
       order: i,
     });
@@ -656,6 +779,9 @@ async function handleMidiFile(file) {
       addedAt: Date.now(),
       notes: parsed.notes,
       sections: [],
+      // Best-effort — most MIDI exports omit the key-signature meta event, in
+      // which case the technique drills fall back to detecting the key.
+      keySignature: (parsed.keySignatures || [])[0] || null,
     };
 
     // Persist the raw MIDI bytes BEFORE updating the UI so a refresh always
@@ -756,32 +882,51 @@ async function readScoreText(file) {
   return file.text();
 }
 
-/** Handle a chosen MusicXML file: derive notes, persist score, auto-split. */
-async function handleScoreFile(file) {
-  if (!file) return;
-  setStatus(`Loading "${file.name}"…`);
+/**
+ * Handle a chosen MusicXML file: derive notes, persist score, auto-split.
+ *
+ * `opts` lets the curated-library loader override behaviour:
+ *   - `title`   : use this exact title instead of deriving it from the filename
+ *                 (so pieces can carry a level prefix like "L1 · …").
+ *   - `addedAt` : force the stored timestamp, so a batch import keeps a stable
+ *                 sidebar order (the list sorts by `addedAt` ascending).
+ *   - `select`  : pass `false` to import without switching the viewer to it.
+ * Returns `'added' | 'skipped' | 'failed'` so a batch caller can tally results.
+ */
+async function handleScoreFile(file, opts = {}) {
+  if (!file) return 'failed';
+  const desiredTitle =
+    typeof opts.title === 'string' && opts.title
+      ? opts.title
+      : titleFromFilename(file.name);
+  // Skip a piece that's already in the library (by title) so re-running the
+  // curated import doesn't create duplicates.
+  if (pieces.some((p) => p.title === desiredTitle)) {
+    return 'skipped';
+  }
+  setStatus(`Loading "${desiredTitle}"…`);
   try {
     let xml;
     try {
       xml = await readScoreText(file);
     } catch (err) {
       setStatus(`Couldn't read "${file.name}": ${err.message || err}`);
-      return;
+      return 'failed';
     }
     const parsed = parseMusicXml(xml);
     if (!parsed.notes.length) {
       setStatus(`"${file.name}" has no playable notes — ignored.`);
-      return;
+      return 'failed';
     }
     annotateFingerings(parsed.notes, { ticksPerQuarter: parsed.ticksPerQuarter });
 
     const piece = {
       id: newPieceId(),
-      title: titleFromFilename(file.name),
+      title: desiredTitle,
       durationSec: parsed.durationSec,
       ticksPerQuarter: parsed.ticksPerQuarter,
       noteCount: parsed.notes.length,
-      addedAt: Date.now(),
+      addedAt: typeof opts.addedAt === 'number' ? opts.addedAt : Date.now(),
       notes: parsed.notes,
       sections: [],
       source: 'musicxml',
@@ -789,6 +934,8 @@ async function handleScoreFile(file) {
       // Kept in memory so the sheet view + measure mapping need no reparse.
       musicXml: xml,
       scoreMeasures: parsed.measures,
+      // Notated key signature — the strongest signal for the technique drills.
+      keySignature: parsed.keySignature || null,
     };
 
     // Persist the extracted score.xml text (so both the parser and OSMD can
@@ -807,10 +954,238 @@ async function handleScoreFile(file) {
     setStatus(
       `Added "${piece.title}" (${piece.noteCount} notes, ${piece.sections.length} sections).`,
     );
-    selectPiece(piece.id);
+    if (opts.select !== false) selectPiece(piece.id);
+    return 'added';
   } catch (err) {
     console.error('Failed to load score', err);
     setStatus(`Failed to load score: ${err.message || err}`);
+    return 'failed';
+  }
+}
+
+/**
+ * Curated starter library — the downloaded MusicXML scores, ordered by level.
+ * Each title carries a level prefix so the sidebar (which sorts by import
+ * order / `addedAt`) groups the pieces by level. Files live in `library/`.
+ */
+const CURATED_LIBRARY = [
+  // Level 1 — Rebuild Fundamentals
+  { file: 'prelude-opus-28-no-4-in-e-minor-chopin.mxl', title: 'L1 · Prélude in E minor, Op. 28 No. 4 — Chopin' },
+  { file: 'prelude-opus-28-no-6-in-b-minor.mxl', title: 'L1 · Prélude in B minor, Op. 28 No. 6 — Chopin' },
+  { file: 'waltz-in-a-minorchopin.mxl', title: 'L1 · Waltz in A minor, B. 150 (posth.) — Chopin' },
+  { file: 'gymnopedie-no-1-satie.mxl', title: 'L1 · Gymnopédie No. 1 — Satie' },
+  { file: 'burgmuller-arabesque-op-100-no-2.mxl', title: 'L1 · Arabesque, Op. 100 No. 2 — Burgmüller' },
+  { file: 'prelude-i-in-c-major-bwv-846-well-tempered-clavier-first-book.mxl', title: 'L1 · Prelude No. 1 in C, BWV 846 — Bach' },
+  // Level 2 — Early Chopin
+  { file: 'nocturne-in-c-sharp-minor.mxl', title: 'L2 · Nocturne in C-sharp minor (posth.) — Chopin' },
+  { file: 'waltz-no7-in-c-sharp-minor-op64-no2-frederic-chopin.mxl', title: 'L2 · Waltz in C-sharp minor, Op. 64 No. 2 — Chopin' },
+  { file: 'frederic-chopin-prelude-in-d-flat-major-op28-no15-raindrop.mxl', title: 'L2 · Prélude in D-flat “Raindrop”, Op. 28 No. 15 — Chopin' },
+  { file: 'arabesque-l-66-no-1-in-e-major.mxl', title: 'L2 · Arabesque No. 1, L. 66 — Debussy' },
+  { file: 'waltz-op64-no1-valse-du-petit-chien-minute-waltz.mxl', title: 'L2 · Waltz in D-flat “Minute”, Op. 64 No. 1 — Chopin' },
+  { file: 'chopin-nocturne-op-9-no-2-e-flat-major.mxl', title: 'L2 · Nocturne in E-flat, Op. 9 No. 2 — Chopin' },
+  { file: 'traumerei.mxl', title: 'L2 · Träumerei (Kinderszenen No. 7) — Schumann' },
+  // Level 3 — Intermediate Virtuosity
+  { file: 'fantaisie-impromptu-in-c-minor-chopin.mxl', title: 'L3 · Fantaisie-Impromptu, Op. 66 — Chopin' },
+  { file: 'etude-opus-10-no-3-in-e-major.mxl', title: 'L3 · Étude “Tristesse”, Op. 10 No. 3 — Chopin' },
+  { file: 'etude-op25-no1-in-ab-major-aeolian-harp-f-chopin.mxl', title: 'L3 · Étude “Aeolian Harp”, Op. 25 No. 1 — Chopin' },
+  { file: 'chopin-nocturne-in-d-flat-major-op-27-no-2.mxl', title: 'L3 · Nocturne in D-flat, Op. 27 No. 2 — Chopin' },
+  { file: 'clair-de-lune-debussy.mxl', title: 'L3 · Clair de Lune — Debussy' },
+  { file: 'liebestraum-s-541-no-3-in-a-major-liszt.mxl', title: 'L3 · Liebestraum No. 3, S. 541 — Liszt' },
+  { file: 'moszkowski-etude-in-g-minor-op72-no2.mxl', title: 'L3 · Étude in G minor, Op. 72 No. 2 — Moszkowski' },
+  // Level 4 — Pre-Ballade Training
+  { file: 'scherzo-no-2-opus-31-in-b-minor.mxl', title: 'L4 · Scherzo No. 2, Op. 31 — Chopin' },
+  { file: 'polonaise-in-a-major-heroic-polonaise.mxl', title: 'L4 · Polonaise “Héroïque”, Op. 53 — Chopin' },
+  { file: 'chopin-etude-op10-no12-in-c-minor-revolutionary.mxl', title: 'L4 · Étude “Revolutionary”, Op. 10 No. 12 — Chopin' },
+  { file: 'etude-opus-25-no-12-ocean-frederic-chopin.mxl', title: 'L4 · Étude “Ocean”, Op. 25 No. 12 — Chopin' },
+  { file: 'etude-op25-no11-in-a-minor-winter-wind-f-chopin.mxl', title: 'L4 · Étude “Winter Wind”, Op. 25 No. 11 — Chopin' },
+  // Final Boss
+  { file: 'chopins-ballade-no-1-in-g-minor.mxl', title: '★ Final Boss · Ballade No. 1 in G minor, Op. 23 — Chopin' },
+  { file: 'frederic-chopin-ballade-no3-in-a-flat-major-op47.mxl', title: '★ Final Boss · Ballade No. 3 in A-flat, Op. 47 — Chopin' },
+];
+
+/**
+ * One-time title migrations for libraries seeded by an earlier manifest. Maps
+ * an old stored title → its current title. Applied on startup so an already
+ * imported piece is updated in place (keeping its sections + SRS history)
+ * instead of being re-imported as a duplicate under the new title.
+ */
+const LIBRARY_TITLE_MIGRATIONS = {
+  'Bonus · Prelude No. 1 in C, BWV 846 — Bach':
+    'L1 · Prelude No. 1 in C, BWV 846 — Bach',
+  'Bonus · Träumerei (Kinderszenen No. 7) — Schumann':
+    'L2 · Träumerei (Kinderszenen No. 7) — Schumann',
+  'Bonus · Nocturne in E-flat, Op. 9 No. 2 — Chopin':
+    'L2 · Nocturne in E-flat, Op. 9 No. 2 — Chopin',
+};
+
+/** Rename any stored pieces that still carry a superseded title. */
+async function migrateLibraryTitles() {
+  for (const p of pieces) {
+    const newTitle = LIBRARY_TITLE_MIGRATIONS[p.title];
+    // Skip if there's nothing to do, or the target title already exists
+    // (don't create a collision).
+    if (!newTitle || pieces.some((q) => q !== p && q.title === newTitle)) {
+      continue;
+    }
+    try {
+      await renamePiece(p.id, newTitle);
+      p.title = newTitle;
+    } catch (err) {
+      console.warn('Library title migration failed for', p.title, err);
+    }
+  }
+}
+
+// Set once the one-time technique-hoist pass below has run.
+const TECHNIQUE_HOIST_FLAG = 'pianoSrsTechniqueHoisted';
+
+/**
+ * Move technique drills to the top of every piece that still has them at the
+ * bottom.
+ *
+ * The drills originally shipped appended after the piece's own sections. They
+ * belong at the front — they're the warm-up, and the practice path opens with
+ * them — but changing where they're *created* only helps newly imported
+ * pieces. Anything already in IndexedDB keeps its stored `order`, so an
+ * existing library would show them at the bottom forever.
+ *
+ * Only `order` changes: rep logs, SRS schedules and tempo goals are untouched,
+ * unlike "Re-split" (which rebuilds everything) or re-keying (which replaces
+ * the drills). Runs at most once — guarded by a localStorage flag — so that
+ * afterwards the user is free to drag drills wherever they like without this
+ * yanking them back on the next reload.
+ */
+async function migrateTechniqueToTop() {
+  let done = null;
+  try { done = localStorage.getItem(TECHNIQUE_HOIST_FLAG); } catch (_) { /* private mode */ }
+  if (done) return;
+  try {
+    const all = await listAllSections();
+    const byPiece = new Map();
+    for (const s of all) {
+      if (!byPiece.has(s.pieceId)) byPiece.set(s.pieceId, []);
+      byPiece.get(s.pieceId).push(s);
+    }
+    const updates = [];
+    for (const secs of byPiece.values()) {
+      if (!secs.some((s) => s.kind === 'technique')) continue;
+      secs.sort(
+        (a, b) => (a.order || 0) - (b.order || 0) || (a.addedAt || 0) - (b.addedAt || 0),
+      );
+      // Drills first, everything else after — both keeping their relative
+      // order, so any arrangement the user already made survives.
+      const desired = [
+        ...secs.filter((s) => s.kind === 'technique'),
+        ...secs.filter((s) => s.kind !== 'technique'),
+      ];
+      desired.forEach((s, i) => {
+        if ((s.order || 0) !== i) updates.push({ id: s.id, order: i });
+      });
+    }
+    if (updates.length) {
+      await reorderSections(updates);
+      // Drop any cached section lists so the new order is picked up on select.
+      for (const p of pieces) p.sections = undefined;
+    }
+    try { localStorage.setItem(TECHNIQUE_HOIST_FLAG, '1'); } catch (_) { /* ignore */ }
+  } catch (err) {
+    // Non-fatal: the drills still work, they're just in the old position, and
+    // the flag stays unset so the next open retries.
+    console.warn('Could not move technique drills to the top', err);
+  }
+}
+
+/**
+ * Order the in-memory piece list to match the curated manifest (so pieces
+ * group by level), with any non-curated pieces falling to the end by addedAt.
+ * Applied after hydrate; ordering is by title, so it's stable across reloads
+ * even though the stored `addedAt` of migrated pieces hasn't changed.
+ */
+function sortPiecesByCuratedOrder() {
+  const orderByTitle = new Map(
+    CURATED_LIBRARY.map((item, i) => [item.title, i]),
+  );
+  pieces.sort((a, b) => {
+    const ia = orderByTitle.has(a.title) ? orderByTitle.get(a.title) : Infinity;
+    const ib = orderByTitle.has(b.title) ? orderByTitle.get(b.title) : Infinity;
+    if (ia !== ib) return ia - ib;
+    return (a.addedAt || 0) - (b.addedAt || 0);
+  });
+}
+
+/** Decode a base64 string to a Uint8Array (for the embedded library bytes). */
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * Fetch the raw `.mxl` bytes for a curated item. Prefers the base64 embedded in
+ * `library-data.js` (works over file://, where fetch is blocked); falls back to
+ * fetching `library/<file>` when the app is served over http://.
+ */
+async function curatedPieceBytes(file) {
+  const data =
+    typeof window !== 'undefined' &&
+    window.CURATED_LIBRARY_DATA &&
+    window.CURATED_LIBRARY_DATA[file];
+  if (typeof data === 'string') {
+    return base64ToBytes(data);
+  }
+  const res = await fetch(`library/${file}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+/**
+ * One-click loader for the curated starter library. For each bundled `.mxl`,
+ * decodes the embedded copy (or fetches it), runs it through the normal
+ * score-import path with a level-prefixed title, and tallies the result.
+ * Already-present pieces are skipped, so it's safe to run more than once.
+ */
+async function handleLoadCuratedLibrary() {
+  setStatus('Loading curated library…');
+  const base = Date.now();
+  let added = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (let i = 0; i < CURATED_LIBRARY.length; i++) {
+    const item = CURATED_LIBRARY[i];
+    // Quick skip before any decode/parse work if it's already in the library.
+    if (pieces.some((p) => p.title === item.title)) {
+      skipped++;
+      continue;
+    }
+    let bytes;
+    try {
+      bytes = await curatedPieceBytes(item.file);
+    } catch (err) {
+      console.warn('Could not load curated piece', item.file, err);
+      failed++;
+      continue;
+    }
+    const result = await handleScoreFile(
+      new File([bytes], item.file, { type: 'application/vnd.recordare.musicxml' }),
+      // `base + i` keeps the level order stable in the sidebar.
+      { title: item.title, addedAt: base + i, select: false },
+    );
+    if (result === 'added') added++;
+    else if (result === 'skipped') skipped++;
+    else failed++;
+    // Yield to the event loop between pieces so the UI can paint progress.
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  renderPieceList(pieces);
+  if (added === 0 && skipped > 0 && failed === 0) {
+    setStatus(`Curated library already loaded (${skipped} pieces).`);
+  } else if (failed > 0) {
+    setStatus(
+      `Curated library: ${added} added, ${skipped} skipped, ${failed} failed.`,
+    );
+  } else {
+    setStatus(`Curated library: ${added} added, ${skipped} already present.`);
   }
 }
 
@@ -853,8 +1228,9 @@ async function selectPiece(pieceId) {
   // On mobile, close the sidebar drawer so the viewer is visible.
   if (isMobileViewport()) closeSidebar();
   // Switching pieces always exits practice mode — practice is per-section
-  // and a section only belongs to one piece.
+  // and a section only belongs to one piece. Same for a whole-piece Listen.
   closePracticeView({ silent: true });
+  stopPieceListen();
   activePieceId = pieceId;
   // Re-render the sidebar so the active highlight moves.
   renderPieceList(pieces);
@@ -870,9 +1246,10 @@ async function selectPiece(pieceId) {
     return;
   }
 
-  // Load sections (and today's rep counts) in the background.
+  // Load sections (and today's rep counts + mistake history) in the background.
   ensureSectionsLoaded(piece)
     .then(() => refreshRepCountsForActivePiece())
+    .then(() => refreshMistakesForActivePiece())
     .then(() => {
       if (activePieceId === piece.id) renderSectionsPanel();
     })
@@ -910,6 +1287,7 @@ async function ensureNotesLoaded(piece) {
     piece.noteCount = parsed.notes.length;
     piece.musicXml = xml;
     piece.scoreMeasures = parsed.measures;
+    piece.keySignature = parsed.keySignature || null;
     return;
   }
   const blob = await getPieceBlob(piece.id);
@@ -923,6 +1301,7 @@ async function ensureNotesLoaded(piece) {
   piece.ticksPerQuarter = parsed.ticksPerQuarter;
   piece.durationSec = parsed.durationSec;
   piece.noteCount = parsed.notes.length;
+  piece.keySignature = (parsed.keySignatures || [])[0] || null;
 }
 
 /** Lazy-load a piece's sections from IDB, caching them on the piece. */
@@ -946,8 +1325,169 @@ function showMidiViewer(piece) {
   if (els.homeBtn) els.homeBtn.hidden = false; // a piece is open → offer Home
   if (els.viewerMidiTitle) els.viewerMidiTitle.textContent = piece.title;
   if (els.viewerMidiMeta) els.viewerMidiMeta.textContent = formatPieceMeta(piece);
+  // The technique form is per-piece; don't carry one piece's key into another.
+  closeTechniqueForm();
   setupPieceView(piece);
-  setStatus(`Showing "${piece.title}" — pick a section to practice.`);
+  renderPieceActions(piece);
+  setStatus(`Showing "${piece.title}" — pick a section to practice, or listen to / play the whole piece.`);
+}
+
+// --- Whole piece: Listen + Play through -----------------------------------
+
+/**
+ * Enable the whole-piece row for a piece with notes; reset its Listen state.
+ * (The row is hidden by CSS while a section is being practised.)
+ */
+function renderPieceActions(piece) {
+  const hasNotes = !!(piece && Array.isArray(piece.notes) && piece.notes.length);
+  if (els.pieceListenBtn) els.pieceListenBtn.disabled = !hasNotes;
+  if (els.piecePlayBtn) els.piecePlayBtn.disabled = !hasNotes;
+  renderPieceListenUI(false);
+}
+
+/**
+ * A synthetic section spanning every note of the piece, for the whole-piece
+ * play-through. Shaped like a stored section so the practice panel, player,
+ * sheet sync and mistake tally can all take it unchanged; its `id` is the
+ * PIECE_RUN_ID sentinel so nothing is ever persisted against it.
+ */
+function wholePieceSection(piece) {
+  const notes = Array.isArray(piece.notes) ? piece.notes : [];
+  let startTick = Infinity;
+  let startSec = Infinity;
+  let endTick = 0;
+  let endSec = 0;
+  for (const n of notes) {
+    if (n.startTick < startTick) startTick = n.startTick;
+    if (n.startSec < startSec) startSec = n.startSec;
+    if (n.endTick > endTick) endTick = n.endTick;
+    if (n.endSec > endSec) endSec = n.endSec;
+  }
+  if (!notes.length) { startTick = 0; startSec = 0; }
+  return {
+    id: PIECE_RUN_ID,
+    pieceId: piece.id,
+    name: piece.title,
+    kind: 'piece',
+    startTick,
+    endTick: endTick + 1, // notesInSection is start-inclusive / end-exclusive
+    startSec,
+    endSec,
+    noteCount: notes.length,
+    notes: '',
+    order: -1,
+  };
+}
+
+/** Is the current practice session a whole-piece play-through? */
+function isPieceRun() {
+  return !!(practiceState && practiceState.mode === 'piece');
+}
+
+/** Lazily build the whole-piece Listen engine (score cursor follows along). */
+function ensurePiecePlayback() {
+  if (piecePlayback || typeof createPiecePlayback !== 'function') return piecePlayback;
+  piecePlayback = createPiecePlayback({
+    onStep: (step) => {
+      if (sheetCursorReady()) sheetView.moveCursorToTick(step.tick);
+    },
+    onTime: (elapsed, total) => renderPieceListenProgress(elapsed, total),
+    onEnd: ({ completed }) => {
+      renderPieceListenUI(false);
+      // Park the cursor again unless a practice run owns it now.
+      if (!practiceState && sheetView && sheetView.isReady()) sheetView.clearCursor();
+      if (completed) setStatus('That’s the whole piece.');
+    },
+  });
+  return piecePlayback;
+}
+
+function togglePieceListen() {
+  if (piecePlayback && piecePlayback.isPlaying()) stopPieceListen();
+  else startPieceListen();
+}
+
+function startPieceListen() {
+  const piece = getActivePiece();
+  if (!piece || !Array.isArray(piece.notes) || !piece.notes.length) return;
+  const pb = ensurePiecePlayback();
+  if (!pb) {
+    setStatus('Playback isn’t available in this browser.');
+    return;
+  }
+  const started = pb.play(piece.notes, { ticksPerQuarter: piece.ticksPerQuarter });
+  if (!started) return;
+  renderPieceListenUI(true);
+  setStatus(`Listening to "${piece.title}" — press L or ■ Stop to stop.`);
+}
+
+function stopPieceListen() {
+  if (piecePlayback && piecePlayback.isPlaying()) piecePlayback.stop(); // → onEnd resets the UI
+  else renderPieceListenUI(false);
+}
+
+function isPieceListening() {
+  return !!(piecePlayback && piecePlayback.isPlaying());
+}
+
+function renderPieceListenUI(playing) {
+  if (els.pieceListenBtn) {
+    els.pieceListenBtn.textContent = playing ? '■ Stop' : '▶ Listen';
+    els.pieceListenBtn.classList.toggle('is-active', playing);
+    els.pieceListenBtn.setAttribute('aria-pressed', String(playing));
+  }
+  if (els.pieceListenProgress) els.pieceListenProgress.hidden = !playing;
+  if (!playing) renderPieceListenProgress(0, 0);
+}
+
+function renderPieceListenProgress(elapsed, total) {
+  if (els.pieceListenTime) {
+    els.pieceListenTime.textContent =
+      `${formatClock(Math.floor(elapsed))} / ${formatClock(Math.ceil(total))}`;
+  }
+  if (els.pieceListenFill) {
+    const pct = total > 0 ? Math.min(100, (elapsed / total) * 100) : 0;
+    els.pieceListenFill.style.width = `${pct}%`;
+  }
+}
+
+/**
+ * Play the whole piece through, start to finish, in the practice panel — a
+ * free run: wait mode still waits for each correct note, but a wrong note is
+ * counted (and logged as a trouble spot) instead of resetting the run, and
+ * nothing is banked toward the section reviews. Any section practice already
+ * open is closed first.
+ */
+function openPieceRun() {
+  const piece = getActivePiece();
+  if (!piece || !Array.isArray(piece.notes) || !piece.notes.length) return;
+  stopPieceListen();
+  if (practiceState) closePracticeView({ silent: true });
+
+  const section = wholePieceSection(piece);
+  practiceState = {
+    sectionId: PIECE_RUN_ID,
+    mode: 'piece',
+    section,
+    dateISO: localDateISO(),
+    count: 0,
+    saving: false,
+    ratingInFlight: false,
+    pendingHalfRep: false,
+    timerStartedAt: Date.now(),
+    timerElapsed: 0,
+    timerPaused: false,
+    runs: 0,
+    bestSlips: null,
+  };
+  startPracticeTimer();
+  renderSectionsPanel();
+  showPracticePanel(section);
+  tempoGoalEditing = false;
+  renderPracticePanel();
+  if (els.viewerMidi) els.viewerMidi.classList.add('is-practicing');
+  mountPlayer(piece, section);
+  setStatus(`Playing "${piece.title}" through — wrong notes are counted, not punished. Esc to stop.`);
 }
 
 /**
@@ -1094,6 +1634,9 @@ function setupSectionDragAndDrop(listEl) {
         }
       }
       setStatus('Section order updated.');
+      // Repaint so the technique group header follows its block — dragging a
+      // phrase above the drills would otherwise strand it at the top.
+      renderSectionsPanel();
     } catch (err) {
       console.error('Failed to persist section reorder:', err);
       setStatus('Error saving section order.');
@@ -1102,6 +1645,21 @@ function setupSectionDragAndDrop(listEl) {
     }
   });
 }
+
+// Badge text for the auto-generated section kinds. Ordinary phrase sections
+// have no `kind` and get no badge.
+const SECTION_KIND_LABELS = {
+  transition: 'Transition',
+  fluency: 'Fluency',
+  technique: 'Technique',
+  trouble: 'Trouble spot',
+};
+const SECTION_KIND_TITLES = {
+  transition: 'Joins two adjacent sections — practice the seam between them',
+  fluency: 'Combined run-through — review the transitions between sections',
+  technique: 'Scale, arpeggio or cadence in this piece’s key — warm up with it',
+  trouble: 'A passage you keep getting wrong — drilled on its own',
+};
 
 /** Render the sections panel for the currently-active piece. */
 function renderSectionsPanel() {
@@ -1114,6 +1672,10 @@ function renderSectionsPanel() {
   els.sectionsPanel.hidden = false;
 
   const sections = Array.isArray(piece.sections) ? piece.sections : [];
+  // Offer the "Practice path" run only when there's a real path to walk.
+  if (els.startPathBtn) els.startPathBtn.hidden = sections.length < 2;
+  renderTechniqueButton();
+  renderTroublePanel();
   els.sectionList.innerHTML = '';
 
   if (sections.length === 0) {
@@ -1125,7 +1687,22 @@ function renderSectionsPanel() {
     return;
   }
 
+  // The technique block is introduced by a group header carrying the key. It's
+  // emitted before the first drill wherever that lands, so the grouping
+  // survives the user dragging sections around.
+  const firstTechnique = sections.find((s) => s.kind === 'technique');
+  const techniqueSpec = firstTechnique
+    ? normaliseTechniqueSpec(firstTechnique.technique)
+    : null;
+  const techniqueKeyName = techniqueSpec
+    ? keyLabel(techniqueSpec.tonic, techniqueSpec.mode)
+    : null;
+
   for (const sec of sections) {
+    if (sec === firstTechnique) {
+      els.sectionList.appendChild(buildTechniqueGroupHeader(techniqueSpec));
+    }
+
     const li = document.createElement('li');
     li.className = 'section-list-item';
     li.dataset.sectionId = sec.id;
@@ -1149,28 +1726,48 @@ function renderSectionsPanel() {
 
     const name = document.createElement('span');
     name.className = 'section-list-name';
-    name.textContent = sec.name;
+    // Under the group header the key is already stated, so "Scale · E minor"
+    // reads as just "Scale". A section the user has renamed won't match the
+    // generated pattern and is left exactly as they wrote it.
+    const keySuffix = ` · ${techniqueKeyName}`;
+    name.textContent =
+      sec.kind === 'technique' && techniqueKeyName && sec.name.endsWith(keySuffix)
+        ? sec.name.slice(0, -keySuffix.length)
+        : sec.name;
     main.appendChild(name);
 
     // Derived join sections get a small kind badge so they're visually
-    // distinct from the per-phrase sections they combine.
-    if (sec.kind === 'transition' || sec.kind === 'fluency') {
+    // distinct from the per-phrase sections they combine. Drills skip it —
+    // the group header above them already says "Technique".
+    if (SECTION_KIND_LABELS[sec.kind]) {
       li.classList.add(`section-kind-${sec.kind}`);
-      const kindBadge = document.createElement('span');
-      kindBadge.className = 'section-list-kind-badge';
-      kindBadge.textContent =
-        sec.kind === 'transition' ? 'Transition' : 'Fluency';
-      kindBadge.title =
-        sec.kind === 'transition'
-          ? 'Joins two adjacent sections — practice the seam between them'
-          : 'Combined run-through — review the transitions between sections';
-      main.appendChild(kindBadge);
+      if (sec.kind !== 'technique') {
+        const kindBadge = document.createElement('span');
+        kindBadge.className = 'section-list-kind-badge';
+        kindBadge.textContent = SECTION_KIND_LABELS[sec.kind];
+        kindBadge.title = SECTION_KIND_TITLES[sec.kind];
+        main.appendChild(kindBadge);
+      }
     }
 
     const meta = document.createElement('span');
     meta.className = 'section-list-meta';
     meta.textContent = formatSectionMeta(sec);
     main.appendChild(meta);
+
+    // A drill's fingering, in the compact form a scale chart uses (tonic to
+    // tonic — it extends cyclically). Derived from the stored spec, so it
+    // stays right when the drills are re-keyed.
+    if (sec.kind === 'technique') {
+      const chart = techniqueFingering(sec.technique);
+      if (chart) {
+        const fingeringEl = document.createElement('span');
+        fingeringEl.className = 'section-list-fingering';
+        fingeringEl.textContent = chart.summary;
+        fingeringEl.title = 'Fingering — 1 = thumb … 5 = little finger';
+        main.appendChild(fingeringEl);
+      }
+    }
 
     // Per-section notes snippet (item 12a). Truncated via CSS to 2 lines.
     if (sec.notes) {
@@ -1187,6 +1784,21 @@ function renderSectionsPanel() {
       timeEl.textContent = `⏱ ${formatTotalPracticeTime(sec.totalPracticeMs)}`;
       timeEl.title = `Total practice time: ${formatTotalPracticeTime(sec.totalPracticeMs)}`;
       main.appendChild(timeEl);
+    }
+
+    // Wrong notes logged inside this section's window, so the list itself
+    // shows where the piece is fighting back. Skipped for technique drills —
+    // their ticks index a generated scale, not the piece.
+    if (sec.kind !== 'technique' && mistakeRecords.length) {
+      const misses = mistakesInSection(mistakeRecords, sec);
+      if (misses > 0) {
+        const missBadge = document.createElement('span');
+        missBadge.className = 'section-list-miss-badge';
+        missBadge.textContent = `✗ ${misses}`;
+        missBadge.title =
+          `${misses} wrong ${misses === 1 ? 'note' : 'notes'} logged in this passage`;
+        main.appendChild(missBadge);
+      }
     }
 
     // Per-section "X / 10 today" badge. Hidden until the user has logged
@@ -1229,6 +1841,19 @@ function renderSectionsPanel() {
         pill.title = `Next review: ${sec.nextDue}`;
         main.appendChild(pill);
       }
+    }
+
+    // Tempo-goal pill — shown once a target tempo is set for this section.
+    const tempoSummary = tempoGoalSummary(sec);
+    if (tempoSummary.hasGoal) {
+      const tempoPill = document.createElement('span');
+      tempoPill.className = 'section-list-tempo';
+      if (tempoSummary.reached) tempoPill.classList.add('is-reached');
+      tempoPill.textContent = `♩ ${tempoSummary.best || '–'}/${tempoSummary.target}`;
+      tempoPill.title = tempoSummary.reached
+        ? `Tempo goal reached — clean at ${tempoSummary.best} BPM (goal ${tempoSummary.target})`
+        : `Best clean ${tempoSummary.best || 0} BPM of ${tempoSummary.target} BPM goal`;
+      main.appendChild(tempoPill);
     }
 
     li.appendChild(main);
@@ -1471,6 +2096,505 @@ async function handleResplitSections() {
   renderStats();
 }
 
+// --- Trouble spots -------------------------------------------------------
+
+// Mistake tallies for the active piece, refreshed on select and after each
+// wrong note. Shape: [{ tick, count, lastAt }] ascending by tick.
+let mistakeRecords = [];
+
+/** Reload the active piece's mistake history from IDB. */
+async function refreshMistakesForActivePiece() {
+  const piece = getActivePiece();
+  if (!piece) { mistakeRecords = []; return; }
+  try {
+    const rows = await listMistakesForPiece(piece.id);
+    if (getActivePiece() === piece) mistakeRecords = rows;
+  } catch (err) {
+    console.warn('Could not load mistake history', err);
+    mistakeRecords = [];
+  }
+}
+
+/**
+ * Tally a wrong note against the piece.
+ *
+ * Technique drills are deliberately excluded: their ticks index a generated
+ * scale on its own grid, so recording them would smear phantom trouble spots
+ * across the opening bars of the actual piece.
+ */
+function noteMistake(section, info) {
+  const piece = getActivePiece();
+  if (!piece || !section || section.kind === 'technique') return;
+  if (!info || !Number.isFinite(info.tick)) return;
+  const tick = Math.round(info.tick);
+  // Update the in-memory tally straight away so the UI reacts immediately;
+  // the IDB write is best-effort behind it.
+  const existing = mistakeRecords.find((r) => r.tick === tick);
+  if (existing) existing.count += 1;
+  else {
+    mistakeRecords.push({ tick, count: 1, lastAt: Date.now() });
+    mistakeRecords.sort((a, b) => a.tick - b.tick);
+  }
+  recordMistake(piece.id, tick).catch((err) => {
+    console.warn('Could not record mistake', err);
+  });
+}
+
+/** Ranked trouble spots for the active piece, each with a drillable range. */
+function currentTroubleSpots() {
+  const piece = getActivePiece();
+  if (!piece || !Array.isArray(piece.notes)) return [];
+  return troubleSpots(mistakeRecords, piece.notes, {
+    ticksPerQuarter: piece.ticksPerQuarter,
+    maxSpots: TROUBLE_MAX_SPOTS,
+  });
+}
+
+/** How many trouble drills already exist for this piece. */
+function troubleSectionsFor(piece) {
+  const sections = piece && Array.isArray(piece.sections) ? piece.sections : [];
+  return sections.filter((s) => s.kind === 'trouble');
+}
+
+/**
+ * Describe where a spot is, preferring bar numbers — "bar 12" is how a player
+ * thinks about a passage; a timestamp is how a file thinks about it.
+ */
+function troubleSpotLabel(piece, spot) {
+  if (piece.scoreMeasures && piece.scoreMeasures.length) {
+    const mr = measuresForSection(
+      { measures: piece.scoreMeasures },
+      { startTick: spot.startTick, endTick: spot.endTick },
+      piece.ticksPerQuarter,
+    );
+    if (mr.count) {
+      return mr.firstNumber === mr.lastNumber
+        ? `bar ${mr.firstNumber}`
+        : `bars ${mr.firstNumber}–${mr.lastNumber}`;
+    }
+  }
+  // MIDI-only piece: fall back to where it sits on the clock.
+  return formatClock(tickToSecForPiece(piece, spot.startTick));
+}
+
+/**
+ * Turn a trouble spot into a real practice section, so it enters the SRS and
+ * the daily queue like anything else. Unlike technique drills these are plain
+ * tick windows into the piece — the notes are already there.
+ */
+async function drillTroubleSpot(spot) {
+  const piece = getActivePiece();
+  if (!piece || !Array.isArray(piece.sections) || !spot) return;
+
+  // Don't stack duplicates: an existing drill covering the same peak is the
+  // one to practise, not a second copy of it.
+  const dupe = troubleSectionsFor(piece).find(
+    (s) => spot.peakTick >= s.startTick && spot.peakTick < s.endTick,
+  );
+  if (dupe) {
+    setStatus(`Already drilling ${dupe.name} — open it from the list.`);
+    return;
+  }
+
+  const label = troubleSpotLabel(piece, spot);
+  const maxOrder = piece.sections.reduce((m, s) => Math.max(m, s.order || 0), -1);
+  const record = sectionToRecord({
+    id: newSectionId(),
+    pieceId: piece.id,
+    name: `Trouble spot · ${label}`,
+    startTick: spot.startTick,
+    endTick: spot.endTick,
+    startSec: tickToSecForPiece(piece, spot.startTick),
+    endSec: tickToSecForPiece(piece, spot.endTick),
+    noteCount: spot.noteCount,
+    notes: `${spot.count} wrong notes logged here. Slow it right down until the `
+      + 'approach is automatic, then bring it back up to tempo.',
+    kind: 'trouble',
+    addedAt: Date.now(),
+    order: maxOrder + 1,
+  });
+  try {
+    await saveSection(record);
+  } catch (err) {
+    console.error('Could not save trouble drill', err);
+    setStatus('Could not create that drill.');
+    return;
+  }
+  piece.sections.push(record);
+  setStatus(`Added a drill for ${label} — ${spot.noteCount} notes.`);
+  renderSectionsPanel();
+  await refreshReviewQueue();
+  renderReviewQueue();
+  openPracticeView(record.id);
+}
+
+/** Seconds for a tick, using the piece's own notes as the reference. */
+function tickToSecForPiece(piece, tick) {
+  const notes = Array.isArray(piece.notes) ? piece.notes : [];
+  // Find the note nearest this tick and interpolate from its own mapping —
+  // avoids re-deriving the tempo map for a cosmetic timestamp.
+  let best = null;
+  for (const n of notes) {
+    if (best === null || Math.abs(n.startTick - tick) < Math.abs(best.startTick - tick)) {
+      best = n;
+    }
+  }
+  if (!best) return 0;
+  const tpq = piece.ticksPerQuarter || 480;
+  const perTick = best.startTick > 0 ? best.startSec / best.startTick : 1 / (tpq * 2);
+  return Math.max(0, tick * perTick);
+}
+
+/**
+ * Render the trouble-spot panel above the section list. Stays hidden until the
+ * history is worth acting on — a beginner's first pass through a piece is all
+ * mistakes, and a heatmap of "everything" tells you nothing.
+ */
+function renderTroublePanel() {
+  const host = els.troublePanel;
+  if (!host || !els.troubleList) return;
+  const piece = getActivePiece();
+  const spots = piece ? currentTroubleSpots() : [];
+  if (!spots.length) {
+    host.hidden = true;
+    els.troubleList.innerHTML = '';
+    return;
+  }
+  host.hidden = false;
+
+  const total = mistakeRecords.reduce((s, r) => s + (r.count || 0), 0);
+  if (els.troubleSummary) {
+    els.troubleSummary.textContent =
+      `${total} wrong ${total === 1 ? 'note' : 'notes'} logged · worst ${spots.length} shown`;
+  }
+
+  const maxCount = spots[0].count;
+  els.troubleList.innerHTML = '';
+  const existing = troubleSectionsFor(piece);
+
+  spots.forEach((spot) => {
+    const li = document.createElement('li');
+    li.className = `trouble-item is-${troubleHeat(spot.count, maxCount)}`;
+
+    const bar = document.createElement('span');
+    bar.className = 'trouble-item-bar';
+    bar.style.width = `${Math.max(8, Math.round((spot.count / maxCount) * 100))}%`;
+    li.appendChild(bar);
+
+    const where = document.createElement('span');
+    where.className = 'trouble-item-where';
+    where.textContent = troubleSpotLabel(piece, spot);
+    li.appendChild(where);
+
+    const count = document.createElement('span');
+    count.className = 'trouble-item-count';
+    count.textContent = `${spot.count}×`;
+    count.title = `${spot.count} wrong notes logged in this passage`;
+    li.appendChild(count);
+
+    const meta = document.createElement('span');
+    meta.className = 'trouble-item-meta';
+    meta.textContent = `${spot.noteCount} notes`;
+    li.appendChild(meta);
+
+    const drilled = existing.some(
+      (s) => spot.peakTick >= s.startTick && spot.peakTick < s.endTick,
+    );
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-sm trouble-item-action';
+    btn.textContent = drilled ? 'Drilling' : 'Drill it';
+    btn.disabled = drilled;
+    btn.title = drilled
+      ? 'A drill for this passage is already in the section list'
+      : 'Create a short practice section around this passage';
+    btn.addEventListener('click', () => drillTroubleSpot(spot));
+    li.appendChild(btn);
+
+    els.troubleList.appendChild(li);
+  });
+}
+
+/** Wipe the piece's mistake history (and offer to drop its drills with it). */
+async function handleClearTroubleSpots() {
+  const piece = getActivePiece();
+  if (!piece) return;
+  const drills = troubleSectionsFor(piece);
+  const ok = window.confirm(
+    'Clear this piece’s mistake history? The heatmap resets and trouble spots '
+      + 'are recalculated from scratch.'
+      + (drills.length
+        ? `\n\nThe ${drills.length} trouble-spot section(s) you've already `
+          + 'created stay put — delete them individually if you no longer want them.'
+        : ''),
+  );
+  if (!ok) return;
+  try {
+    await deleteMistakesForPiece(piece.id);
+  } catch (err) {
+    console.warn('Could not clear mistake history', err);
+  }
+  mistakeRecords = [];
+  setStatus('Mistake history cleared.');
+  renderSectionsPanel();
+}
+
+// --- Technique drills ----------------------------------------------------
+
+/** The active piece's technique sections, in stored order. */
+function techniqueSectionsFor(piece) {
+  const sections = piece && Array.isArray(piece.sections) ? piece.sections : [];
+  return sections.filter((s) => s.kind === 'technique');
+}
+
+/**
+ * Show the technique control in the sections header. Pieces imported before
+ * this feature existed have no drills, so the button doubles as "add them" and
+ * "these are in the wrong key" — a full Re-split would work too, but that
+ * discards every section's practice history along with it.
+ */
+function renderTechniqueButton() {
+  const btn = els.techniqueBtn;
+  if (!btn) return;
+  const piece = getActivePiece();
+  if (!piece || !Array.isArray(piece.sections)) {
+    btn.hidden = true;
+    return;
+  }
+  // Once drills exist, the group header at the top of the list carries the
+  // "Change key" control instead — it sits next to the key it changes. The
+  // header button is only needed to offer drills that aren't there yet.
+  btn.hidden = techniqueSectionsFor(piece).length > 0;
+  btn.textContent = '♪ Add technique';
+  btn.title = 'Add scale, arpeggio and cadence drills in this piece’s key';
+}
+
+/**
+ * The banner that opens the technique block in the section list. Naming the
+ * key once here lets the rows below read "Scale" / "Arpeggio" / "Cadence"
+ * instead of repeating "· E minor" three times.
+ */
+function buildTechniqueGroupHeader(spec) {
+  const li = document.createElement('li');
+  li.className = 'section-group-header';
+
+  const label = document.createElement('span');
+  label.className = 'section-group-label';
+  label.textContent = 'Technique';
+  li.appendChild(label);
+
+  if (spec) {
+    const keyPill = document.createElement('span');
+    keyPill.className = 'section-group-key';
+    keyPill.textContent = keyLabel(spec.tonic, spec.mode);
+    li.appendChild(keyPill);
+
+    const notes = document.createElement('span');
+    notes.className = 'section-group-scale';
+    notes.textContent = scaleNoteNames(spec.tonic, spec.mode).join(' ');
+    notes.title = spec.mode === 'minor'
+      ? 'Harmonic minor — the raised 7th matches the dominant in the cadence'
+      : `The notes of ${keyLabel(spec.tonic, spec.mode)}`;
+    li.appendChild(notes);
+  }
+
+  const change = document.createElement('button');
+  change.type = 'button';
+  change.className = 'btn btn-sm section-group-action';
+  change.textContent = 'Change key';
+  change.title = 'Rebuild these drills in a different key';
+  change.addEventListener('click', () => {
+    if (els.techniqueForm && !els.techniqueForm.hidden) closeTechniqueForm();
+    else openTechniqueForm();
+  });
+  li.appendChild(change);
+
+  return li;
+}
+
+/** Fill the tonic dropdown, respelling the notes for the selected mode. */
+function syncTechniqueTonicOptions(selected) {
+  const sel = els.techniqueTonicInput;
+  if (!sel) return;
+  const mode = els.techniqueModeInput ? els.techniqueModeInput.value : 'major';
+  const keep = typeof selected === 'number' ? selected : Number(sel.value) || 0;
+  sel.innerHTML = '';
+  for (let t = 0; t < 12; t++) {
+    const opt = document.createElement('option');
+    opt.value = String(t);
+    opt.textContent = keyTonicName(t, mode);
+    sel.appendChild(opt);
+  }
+  sel.value = String(keep);
+  renderTechniquePreview();
+}
+
+/**
+ * Spell out the scale the current selection would drill. Seeing "E F♯ G A B C
+ * D♯" is a far faster check that the key is right than reading its name.
+ */
+function renderTechniquePreview() {
+  const host = els.techniqueFormPreview;
+  if (!host) return;
+  const tonic = Number(els.techniqueTonicInput && els.techniqueTonicInput.value);
+  const mode = els.techniqueModeInput && els.techniqueModeInput.value === 'minor'
+    ? 'minor'
+    : 'major';
+  if (!Number.isFinite(tonic)) {
+    host.textContent = '';
+    return;
+  }
+  host.innerHTML = '';
+  const notes = document.createElement('strong');
+  notes.className = 'technique-form-preview-notes';
+  notes.textContent = scaleNoteNames(tonic, mode).join(' ');
+  host.appendChild(notes);
+
+  const tail = document.createElement('span');
+  tail.textContent = mode === 'minor'
+    ? ' — harmonic minor, so the 7th is raised'
+    : '';
+  host.appendChild(tail);
+}
+
+/** Open the add/re-key form, prefilled with the piece's current key. */
+function openTechniqueForm() {
+  const piece = getActivePiece();
+  if (!piece || !els.techniqueForm) return;
+  const existing = techniqueSectionsFor(piece);
+
+  // Prefer the key the existing drills were built in; otherwise resolve one
+  // from the score's key signature or the notes themselves.
+  let key = null;
+  const spec = existing.length ? normaliseTechniqueSpec(existing[0].technique) : null;
+  if (spec) {
+    key = { tonic: spec.tonic, mode: spec.mode, source: 'existing' };
+  } else if (Array.isArray(piece.notes)) {
+    key = resolveKey({
+      notes: piece.notes,
+      keySignature: piece.keySignature || null,
+      ticksPerQuarter: piece.ticksPerQuarter,
+    });
+  }
+  if (!key) key = { tonic: 0, mode: 'major', source: 'detected', confidence: 0 };
+
+  if (els.techniqueModeInput) els.techniqueModeInput.value = key.mode;
+  syncTechniqueTonicOptions(key.tonic);
+
+  if (els.techniqueFormHint) {
+    // Say where the key came from — a low-confidence guess is worth checking
+    // before drilling the wrong scale for a fortnight.
+    let hint;
+    if (key.source === 'existing') {
+      hint = `Currently drilling ${keyLabel(key.tonic, key.mode)}. `
+        + 'Re-keying replaces the drills and their practice history.';
+    } else if (key.source === 'signature') {
+      hint = `Read ${keyLabel(key.tonic, key.mode)} from the score’s key signature.`;
+    } else if (key.confidence > 0.05) {
+      hint = `Detected ${keyLabel(key.tonic, key.mode)} from the notes.`;
+    } else {
+      hint = `Best guess is ${keyLabel(key.tonic, key.mode)}, but this piece’s `
+        + 'key is ambiguous — worth setting by hand.';
+    }
+    els.techniqueFormHint.textContent = hint;
+  }
+  if (els.techniqueFormSubmit) {
+    els.techniqueFormSubmit.textContent = existing.length ? 'Rebuild drills' : 'Add drills';
+  }
+  els.techniqueForm.hidden = false;
+}
+
+/** Hide the technique form. */
+function closeTechniqueForm() {
+  if (els.techniqueForm) els.techniqueForm.hidden = true;
+}
+
+/**
+ * Create (or replace) the piece's technique sections in the chosen key.
+ * Only technique sections are touched — the piece's own phrase sections and
+ * their schedules are left exactly as they are.
+ */
+async function handleTechniqueSubmit(event) {
+  if (event) event.preventDefault();
+  const piece = getActivePiece();
+  if (!piece || !Array.isArray(piece.sections)) return;
+
+  const tonic = Number(els.techniqueTonicInput && els.techniqueTonicInput.value);
+  const mode = els.techniqueModeInput && els.techniqueModeInput.value === 'minor'
+    ? 'minor'
+    : 'major';
+  if (!Number.isFinite(tonic)) return;
+
+  const existing = techniqueSectionsFor(piece);
+  if (existing.length) {
+    const ok = window.confirm(
+      `Rebuild the technique drills in ${keyLabel(tonic, mode)}? The current `
+        + 'drills and their practice progress will be discarded.',
+    );
+    if (!ok) return;
+    // The open section may be one we're about to delete.
+    if (practiceState && existing.some((s) => s.id === practiceState.sectionId)) {
+      closePracticeView({ silent: true });
+    }
+    try {
+      for (const s of existing) await deleteSection(s.id);
+      await deleteRepLogsForSections(existing.map((s) => s.id));
+    } catch (err) {
+      console.warn('Could not fully clear old technique sections', err);
+    }
+    piece.sections = piece.sections.filter((s) => s.kind !== 'technique');
+  }
+
+  // Drills lead the list, so they take orders 0..n-1 and everything already on
+  // the piece shifts down to make room. Renumbering by current position keeps
+  // any ordering the user has already dragged into place.
+  const specs = techniqueSpecsForKey({ tonic, mode }, 0);
+  const now = Date.now();
+  const added = specs.map((range, i) => sectionToRecord({
+    id: newSectionId(),
+    pieceId: piece.id,
+    name: range.name,
+    startTick: range.startTick,
+    endTick: range.endTick,
+    startSec: range.startSec,
+    endSec: range.endSec,
+    noteCount: range.noteCount,
+    notes: range.notes || '',
+    kind: range.kind,
+    technique: range.technique,
+    addedAt: now + i,
+    order: i,
+  }));
+  for (const record of added) {
+    try { await saveSection(record); } catch (_) { /* best-effort */ }
+  }
+
+  const shifted = piece.sections
+    .slice()
+    .sort((a, b) => (a.order || 0) - (b.order || 0) || (a.addedAt || 0) - (b.addedAt || 0))
+    .map((s, i) => ({ id: s.id, order: specs.length + i }));
+  try {
+    if (shifted.length) await reorderSections(shifted);
+    const orderMap = new Map(shifted.map((u) => [u.id, u.order]));
+    for (const s of piece.sections) s.order = orderMap.get(s.id) ?? s.order;
+  } catch (err) {
+    console.warn('Could not renumber sections after adding drills', err);
+  }
+
+  piece.sections.unshift(...added);
+  piece.sections.sort((a, b) => (a.order || 0) - (b.order || 0));
+  piece.key = { tonic, mode };
+
+  closeTechniqueForm();
+  repCountsToday.clear();
+  setStatus(`Technique drills ready in ${keyLabel(tonic, mode)}.`);
+  renderSectionsPanel();
+  await refreshReviewQueue();
+  renderReviewQueue();
+  await refreshStats();
+  renderStats();
+}
+
 // --- Practice panel ------------------------------------------------------
 
 /** Open the practice panel for the given section. */
@@ -1479,6 +2603,10 @@ async function openPracticeView(sectionId) {
   if (!piece || !Array.isArray(piece.sections)) return;
   const section = piece.sections.find((s) => s.id === sectionId);
   if (!section) return;
+
+  // A whole-piece Listen / play-through gives way to section practice.
+  stopPieceListen();
+  if (isPieceRun()) closePracticeView({ silent: true });
 
   const dateISO = localDateISO();
   // Seed the in-memory count from the cache; we'll reconcile against IDB
@@ -1502,6 +2630,10 @@ async function openPracticeView(sectionId) {
   renderSectionsPanel();
   // Reveal the practice panel and paint the initial state.
   showPracticePanel(section);
+  // Tempo goals: restore this section's working tempo onto the metronome so it
+  // picks up where it left off, and paint a fresh (non-editing) tempo card.
+  tempoGoalEditing = false;
+  initSectionTempo(section);
   renderPracticePanel();
   // Add the practicing layout class to reorder DOM visually.
   if (els.viewerMidi) els.viewerMidi.classList.add('is-practicing');
@@ -1553,6 +2685,7 @@ function showPracticePanel(section) {
       els.practiceSectionNotes.hidden = true;
     }
   }
+  renderPracticeFingering(section);
   // Item 20 — show cumulative practice time for this section.
   updatePracticeTotalTime(section);
 
@@ -1560,6 +2693,128 @@ function showPracticePanel(section) {
   if (els.practiceProgressTrack) {
     els.practiceProgressTrack.setAttribute('aria-valuemax', String(REP_GOAL));
   }
+}
+
+/**
+ * The fingering chart shown above the player for a technique drill: note
+ * names across the top, one row of finger numbers per hand — the line a scale
+ * book prints over the stave. The falling notes carry the same digits one at
+ * a time; this is the whole pattern at once, which is what you actually learn
+ * a scale from. Hidden for ordinary sections, whose fingerings live on the
+ * score and the falling notes.
+ */
+function renderPracticeFingering(section) {
+  const host = els.practiceFingering;
+  if (!host) return;
+  host.innerHTML = '';
+  const chart = section && section.kind === 'technique'
+    ? techniqueFingering(section.technique)
+    : null;
+  if (!chart) {
+    host.hidden = true;
+    return;
+  }
+
+  const head = document.createElement('div');
+  head.className = 'practice-fingering-head';
+  const label = document.createElement('span');
+  label.className = 'practice-fingering-label';
+  label.textContent = 'Fingering';
+  head.appendChild(label);
+  const caption = document.createElement('span');
+  caption.className = 'practice-fingering-caption';
+  caption.textContent = chart.caption;
+  head.appendChild(caption);
+  host.appendChild(head);
+
+  // The table scrolls sideways inside its own box on narrow screens rather
+  // than wrapping — a fingering pattern split across lines is unreadable.
+  const scroller = document.createElement('div');
+  scroller.className = 'practice-fingering-scroll';
+  const table = document.createElement('table');
+  table.className = `practice-fingering-table is-${chart.layout}`;
+
+  const cell = (tag, text, className) => {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text !== undefined) el.textContent = text;
+    return el;
+  };
+  const handHeader = (hand) => {
+    const th = cell('th', hand, 'practice-fingering-hand');
+    th.scope = 'row';
+    th.title = hand === 'RH' ? 'Right hand' : 'Left hand';
+    return th;
+  };
+
+  if (chart.layout === 'run') {
+    // Header: the note names. Body: one row per hand, a finger per note.
+    const thead = document.createElement('thead');
+    const nameRow = document.createElement('tr');
+    nameRow.appendChild(cell('th', '', 'practice-fingering-corner'));
+    for (const name of chart.names) {
+      const th = cell('th', name, 'practice-fingering-note');
+      th.scope = 'col';
+      nameRow.appendChild(th);
+    }
+    thead.appendChild(nameRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    for (const h of chart.hands) {
+      const tr = document.createElement('tr');
+      tr.appendChild(handHeader(h.hand));
+      h.fingers.forEach((f, i) => {
+        const td = cell('td', String(f), 'practice-fingering-finger');
+        // Mark the thumb so the crossing points jump out — that's the part of
+        // a scale fingering you're really memorising.
+        if (f === 1) td.classList.add('is-thumb');
+        // The tonics frame each octave.
+        if (i % chart.cycle === 0) td.classList.add('is-tonic');
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+  } else {
+    // Chords: header row of Roman numerals; each hand's cell stacks the chord
+    // tones over their fingers so finger sits under note.
+    const thead = document.createElement('thead');
+    const labelRow = document.createElement('tr');
+    labelRow.appendChild(cell('th', '', 'practice-fingering-corner'));
+    for (const c of chart.chords) {
+      const th = cell('th', c.label, 'practice-fingering-chord-label');
+      th.scope = 'col';
+      labelRow.appendChild(th);
+    }
+    thead.appendChild(labelRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    for (const hand of ['rh', 'lh']) {
+      const tr = document.createElement('tr');
+      tr.appendChild(handHeader(hand === 'rh' ? 'RH' : 'LH'));
+      for (const c of chart.chords) {
+        const voicing = c[hand];
+        const td = cell('td', undefined, 'practice-fingering-chord');
+        voicing.notes.forEach((note, i) => {
+          const voice = cell('span', undefined, 'practice-fingering-voice');
+          voice.appendChild(cell('span', note, 'practice-fingering-note'));
+          const f = cell('span', String(voicing.fingers[i]), 'practice-fingering-finger');
+          if (voicing.fingers[i] === 1) f.classList.add('is-thumb');
+          voice.appendChild(f);
+          td.appendChild(voice);
+        });
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+  }
+
+  scroller.appendChild(table);
+  host.appendChild(scroller);
+  host.hidden = false;
 }
 
 /** Update the cumulative practice time badge in the practice panel header. */
@@ -1583,11 +2838,18 @@ function mountPlayer(piece, section) {
   if (!player) {
     player = createPlayer(els.playerHost, {
       onRepComplete: recordCleanRun,
-      onMistake: () => {
-        setStatus('Wrong note — run reset. Play the section again from the top.');
-        // Snap the score cursor back to the section's start on a reset.
+      onMistake: (info) => {
         const sec = getActiveSection();
-        if (sheetCursorReady() && sec) sheetView.moveCursorToTick(sec.startTick);
+        if (info && info.reset === false) {
+          // Lenient play-through: the run carries on from where it is.
+          setStatus('Wrong note — counted. Keep going.');
+        } else {
+          setStatus('Wrong note — run reset. Play the section again from the top.');
+          // Snap the score cursor back to the section's start on a reset.
+          if (sheetCursorReady() && sec) sheetView.moveCursorToTick(sec.startTick);
+        }
+        // Tally where it went wrong so the piece's weak spots surface later.
+        noteMistake(sec, info);
       },
       // Follow-cursor: advance the engraved-score cursor to each new step.
       onProgress: (info) => {
@@ -1606,19 +2868,59 @@ function mountPlayer(piece, section) {
   }
   player.resetCleanRunCount();
   // Memory mode: maturity sets the starting fade stage; runIndex continues the
-  // within-session ramp from today's already-completed clean runs.
-  const baseStage = memoryBaselineStage(section);
-  const runIndex = practiceState ? practiceState.count : 0;
-  player.load(piece, section, { baseStage, runIndex });
+  // within-session ramp from today's already-completed clean runs. A
+  // whole-piece play-through is a read-through, not a memory drill: full
+  // cues, and wrong notes are counted rather than resetting the run.
+  const pieceRun = section.kind === 'piece';
+  const baseStage = pieceRun ? 0 : memoryBaselineStage(section);
+  const runIndex = pieceRun ? 0 : practiceState ? practiceState.count : 0;
+  // A technique drill's notes aren't in the piece — they're regenerated from
+  // the section's stored spec onto their own tick grid. Handing the player a
+  // stand-in piece lets the drill run through the unmodified load path, so it
+  // gets the same wait-mode grading, hand toggle and memory fade as real music.
+  player.load(techniquePieceFor(section) || piece, section, {
+    baseStage,
+    runIndex,
+    strict: !pieceRun,
+  });
+  // Reading aids / display prefs from the settings menu, then the one-time
+  // input defaults (hand, guide keys, computer keys) for this session.
+  player.applySettings(getAllSettings());
   player.start();
+  applySessionDefaultsToPlayer();
   // On the engraved score: highlight this section's measures and park the
   // cursor at its first onset.
   syncSheetToSection(piece, section);
 }
 
-/** True when the sheet view is rendered and the active piece has a score. */
+/**
+ * The stand-in piece for a technique drill — `{ticksPerQuarter, notes}` built
+ * fresh from the section's stored spec. Null for ordinary sections, which read
+ * their notes out of the real piece.
+ */
+function techniquePieceFor(section) {
+  if (!section || section.kind !== 'technique') return null;
+  const spec = normaliseTechniqueSpec(section.technique);
+  if (!spec) return null;
+  const built = techniquePieceForSpec(spec);
+  // Fingerings are already stamped on generated notes as `scoreFinger`, which
+  // annotateFingerings treats as authoritative — so this fills in `hand`
+  // without overriding the textbook pattern.
+  annotateFingerings(built.notes, { ticksPerQuarter: built.ticksPerQuarter });
+  return built;
+}
+
+/**
+ * True when the sheet view is rendered and the active piece has a score.
+ *
+ * A technique drill is deliberately excluded: its ticks index a generated
+ * scale, not the engraved score, so following them would drag the cursor
+ * through unrelated bars of the piece.
+ */
 function sheetCursorReady() {
   const piece = getActivePiece();
+  const section = getActiveSection();
+  if (section && section.kind === 'technique') return false;
   return !!(sheetView && sheetView.isReady() && piece && piece.hasScore);
 }
 
@@ -1627,7 +2929,24 @@ function sheetCursorReady() {
  * its first onset. No-op for MIDI-only pieces or before the score has rendered.
  */
 function syncSheetToSection(piece, section) {
-  if (!sheetCursorReady() || !piece.scoreMeasures) return;
+  // Technique drills have no place on the score — drop any highlight left over
+  // from the section practised before this one.
+  if (section && section.kind === 'technique') {
+    if (sheetView && sheetView.isReady()) {
+      sheetView.clearHighlight();
+      sheetView.clearCursor();
+    }
+    return;
+  }
+  if (!sheetCursorReady()) return;
+  // The whole piece has no "section" to frame — just start the cursor at the
+  // top and let it follow the run.
+  if (section && section.kind === 'piece') {
+    sheetView.clearHighlight();
+    sheetView.moveCursorToTick(section.startTick);
+    return;
+  }
+  if (!piece.scoreMeasures) return;
   const mr = measuresForSection(
     { measures: piece.scoreMeasures }, section, piece.ticksPerQuarter,
   );
@@ -1647,6 +2966,21 @@ function syncSheetToSection(piece, section) {
  */
 async function recordCleanRun(info = {}) {
   if (!practiceState) return;
+  // Whole-piece play-through: nothing is banked — just keep the session tally.
+  if (isPieceRun()) {
+    const slips = Number.isFinite(info.mistakes) ? info.mistakes : 0;
+    practiceState.runs = (practiceState.runs || 0) + 1;
+    if (practiceState.bestSlips === null || slips < practiceState.bestSlips) {
+      practiceState.bestSlips = slips;
+    }
+    setStatus(
+      slips === 0
+        ? 'Whole piece, not a single wrong note. 🎉'
+        : `Whole piece played through — ${slips} wrong note${slips === 1 ? '' : 's'}.`,
+    );
+    renderPracticePanel();
+    return;
+  }
   const { sectionId, dateISO, count } = practiceState;
   if (isRepGoalMet(count)) return;
 
@@ -1657,8 +2991,11 @@ async function recordCleanRun(info = {}) {
   if (info.hinted) {
     if (!practiceState.pendingHalfRep) {
       practiceState.pendingHalfRep = true;
+      const why = info.hints
+        ? `${info.hints} hint${info.hints === 1 ? '' : 's'}`
+        : 'key guides on';
       setStatus(
-        `Run done with ${info.hints} hint${info.hints === 1 ? '' : 's'} — that's half a rep. One more run to bank it.`,
+        `Run done with ${why} — that's half a rep. One more run to bank it.`,
       );
       return;
     }
@@ -1685,8 +3022,15 @@ async function recordCleanRun(info = {}) {
     noteRepLogActivity(dateISO);
     // Advance the within-session memory-fade ramp to match the new count.
     if (player) player.setRunIndex(persisted.count);
+    // Tempo goals: if the metronome was running, this clean run happened at its
+    // BPM — bank a new best if it beats the section's record.
+    const tempoBest = maybeRecordTempoAchievement(getActiveSection(), {
+      hinted: info.hinted,
+    });
     if (isRepGoalMet(persisted.count)) {
       setStatus(`All ${persisted.count} clean runs done — pick a rating to schedule the next review.`);
+    } else if (tempoBest !== null) {
+      setStatus(`Clean run ${persisted.count} of ${REP_GOAL} — new best tempo, ${tempoBest} BPM! 🎉`);
     } else {
       setStatus(`Clean run ${persisted.count} of ${REP_GOAL}.`);
     }
@@ -1804,8 +3148,9 @@ function togglePracticeTimer() {
  */
 function closePracticeView({ silent, keepReviewSession } = {}) {
   stopPracticeTimer(); // item 18 — stop session timer
-  // Item 19 — persist cumulative practice time before clearing state.
-  if (practiceState) {
+  // Item 19 — persist cumulative practice time before clearing state. A
+  // whole-piece play-through has no stored section to credit, so it's skipped.
+  if (practiceState && !isPieceRun()) {
     const elapsed = getPracticeElapsed();
     if (elapsed > 0) {
       const sid = practiceState.sectionId;
@@ -1828,6 +3173,8 @@ function closePracticeView({ silent, keepReviewSession } = {}) {
       }).catch((err) => console.warn('Failed to persist practice time', err));
     }
   }
+  // Tempo goals — remember where the metronome was left for this section.
+  persistWorkingTempo();
   stopMetronome(); // item 12b — silence metronome when leaving practice
   if (player) player.stop(); // stop the Synthesia engine + release MIDI input
   // Clear the score's section highlight + follow cursor when leaving practice.
@@ -1835,10 +3182,23 @@ function closePracticeView({ silent, keepReviewSession } = {}) {
     sheetView.clearHighlight();
     sheetView.clearCursor();
   }
-  if (els.viewerMidi) els.viewerMidi.classList.remove('is-practicing');
+  if (els.viewerMidi) {
+    els.viewerMidi.classList.remove('is-practicing');
+    els.viewerMidi.classList.remove('has-up-next');
+  }
+  if (els.practiceUpNext) {
+    els.practiceUpNext.hidden = true;
+    els.practiceUpNext.innerHTML = '';
+  }
+  tempoGoalEditing = false;
+  if (els.tempoGoal) els.tempoGoal.hidden = true;
   const wasActive = !!practiceState;
   practiceState = null;
-  if (els.practicePanel) els.practicePanel.hidden = true;
+  if (els.practicePanel) {
+    els.practicePanel.hidden = true;
+    els.practicePanel.classList.remove('is-piece-run');
+  }
+  if (els.practiceEyebrow) els.practiceEyebrow.textContent = 'Practicing';
   if (els.practiceStatus) {
     els.practiceStatus.textContent = '';
     els.practiceStatus.hidden = true;
@@ -1875,6 +3235,30 @@ function closePracticeView({ silent, keepReviewSession } = {}) {
  */
 function renderPracticePanel() {
   if (!practiceState || !els.practicePanel) return;
+  const pieceRun = isPieceRun();
+  els.practicePanel.classList.toggle('is-piece-run', pieceRun);
+  if (els.practiceEyebrow) {
+    els.practiceEyebrow.textContent = pieceRun ? 'Playing through' : 'Practicing';
+  }
+  if (pieceRun) {
+    // No reps, ratings, tempo goal or up-next rail — just the run itself and
+    // a session tally.
+    if (els.practiceStatus) {
+      const { runs, bestSlips } = practiceState;
+      els.practiceStatus.textContent = runs > 0
+        ? `${runs} play-through${runs === 1 ? '' : 's'} this session · best: `
+          + `${bestSlips === 0 ? 'no wrong notes' : `${bestSlips} wrong note${bestSlips === 1 ? '' : 's'}`}.`
+        : 'Play the whole piece from the top. Wrong notes are counted (and logged as trouble spots) but never reset the run — and nothing here counts toward the section reviews.';
+      els.practiceStatus.hidden = false;
+    }
+    renderNextReview(null);
+    renderRatingPrompt(null);
+    if (els.practiceResetBtn) els.practiceResetBtn.disabled = true;
+    updateReviewSessionBar();
+    renderUpNext(null);
+    renderTempoGoal(null);
+    return;
+  }
   const { count, saving } = practiceState;
   const goalMet = isRepGoalMet(count);
   const section = getActiveSection();
@@ -1921,11 +3305,143 @@ function renderPracticePanel() {
 
   // Guided-review banner (shown only during a "Start daily review" run).
   updateReviewSessionBar();
+
+  // "Up next" side rail — the next section in this piece's practice path.
+  renderUpNext(section);
+
+  // Tempo-goal card (works the metronome).
+  renderTempoGoal(section);
+}
+
+/**
+ * Render the "Up next" side rail: the next section in this piece's practice
+ * path (see buildPracticeSequence), so the user can see what's coming while
+ * they play and jump straight to it when the current section is done.
+ *
+ * Hidden during a guided daily review — that run already drives its own
+ * cross-piece navigation via the review bar, and two competing "next"
+ * affordances would be confusing.
+ */
+function renderUpNext(section) {
+  const host = els.practiceUpNext;
+  if (!host) return;
+  const piece = getActivePiece();
+  const hide = () => {
+    host.hidden = true;
+    host.innerHTML = '';
+    if (els.viewerMidi) els.viewerMidi.classList.remove('has-up-next');
+  };
+  if (
+    !section ||
+    !piece ||
+    !Array.isArray(piece.sections) ||
+    piece.sections.length <= 1 ||
+    reviewSession ||
+    isPieceRun() // the whole piece isn't a step on the path
+  ) {
+    hide();
+    return;
+  }
+
+  const seq = buildPracticeSequence(piece.sections);
+  const idx = seq.findIndex((s) => s.id === section.id);
+  const total = seq.length;
+  const next = idx >= 0 && idx + 1 < total ? seq[idx + 1] : null;
+
+  host.innerHTML = '';
+  host.hidden = false;
+  if (els.viewerMidi) els.viewerMidi.classList.add('has-up-next');
+
+  const eyebrow = document.createElement('span');
+  eyebrow.className = 'practice-up-next-eyebrow';
+  eyebrow.textContent = next ? 'Up next' : 'Practice path';
+  host.appendChild(eyebrow);
+
+  if (idx >= 0) {
+    const pos = document.createElement('span');
+    pos.className = 'practice-up-next-pos';
+    pos.textContent = `Step ${idx + 1} of ${total}`;
+    host.appendChild(pos);
+  }
+
+  if (!next) {
+    const done = document.createElement('p');
+    done.className = 'practice-up-next-done';
+    done.textContent =
+      'Last step in this piece — nice work finishing the path.';
+    host.appendChild(done);
+    return;
+  }
+
+  const card = document.createElement('div');
+  card.className = 'practice-up-next-card';
+  if (SECTION_KIND_LABELS[next.kind]) {
+    card.classList.add(`section-kind-${next.kind}`);
+  }
+
+  const name = document.createElement('span');
+  name.className = 'practice-up-next-name';
+  name.textContent = next.name;
+  card.appendChild(name);
+
+  if (SECTION_KIND_LABELS[next.kind]) {
+    const badge = document.createElement('span');
+    badge.className = 'section-list-kind-badge';
+    badge.textContent = SECTION_KIND_LABELS[next.kind];
+    card.appendChild(badge);
+  }
+
+  const meta = document.createElement('span');
+  meta.className = 'practice-up-next-meta';
+  meta.textContent = formatSectionMeta(next);
+  card.appendChild(meta);
+
+  // Today's progress on the next section, if the user has already touched it.
+  const nextCount = repCountsToday.get(next.id) || 0;
+  if (nextCount > 0) {
+    const prog = document.createElement('span');
+    prog.className = 'practice-up-next-progress';
+    prog.textContent = isRepGoalMet(nextCount)
+      ? `Done today · ${nextCount}/${REP_GOAL}`
+      : `${nextCount}/${REP_GOAL} today`;
+    card.appendChild(prog);
+  }
+
+  host.appendChild(card);
+
+  const goBtn = document.createElement('button');
+  goBtn.type = 'button';
+  goBtn.className = 'btn btn-sm btn-practice practice-up-next-go';
+  goBtn.textContent = 'Practice next →';
+  const goalMet = isRepGoalMet(practiceState ? practiceState.count : 0);
+  if (goalMet) goBtn.classList.add('is-ready');
+  goBtn.title = goalMet
+    ? `Move on to "${next.name}"`
+    : `Jump ahead to "${next.name}" — you can come back to this one`;
+  goBtn.addEventListener('click', () => openPracticeView(next.id));
+  host.appendChild(goBtn);
+
+  // Start an auto-advancing run through the rest of the path from here. Only
+  // worth offering when more than one step remains (next + at least one more).
+  const seqLen = seq.length;
+  if (idx >= 0 && seqLen - idx > 1) {
+    const runBtn = document.createElement('button');
+    runBtn.type = 'button';
+    runBtn.className = 'btn btn-sm practice-up-next-run';
+    runBtn.textContent = '▶ Run path from here';
+    runBtn.title =
+      'Auto-advance through the rest of the path — finish and rate each step to roll on';
+    runBtn.addEventListener('click', () => startPathFromHere());
+    host.appendChild(runBtn);
+  }
 }
 
 /** Find the currently-being-practiced section, or null. */
 function getActiveSection() {
   if (!practiceState) return null;
+  // A whole-piece play-through practises a synthetic section that isn't in
+  // the piece's stored list.
+  if (practiceState.mode === 'piece') return practiceState.section || null;
   const piece = getActivePiece();
   if (!piece || !Array.isArray(piece.sections)) return null;
   return piece.sections.find((s) => s.id === practiceState.sectionId) || null;
@@ -2231,10 +3747,19 @@ async function handleResetReps() {
 async function refreshReviewQueue() {
   const dateISO = localDateISO();
   try {
-    const [allSections, countsByDate] = await Promise.all([
+    const [allSections, countsByDate, allRepLogs] = await Promise.all([
       listAllSections(),
       getRepCountsForDate(dateISO),
+      listAllRepLogs(),
     ]);
+    // Lifetime rep totals → per-section time estimates for the planner.
+    const totals = new Map();
+    for (const log of allRepLogs) {
+      if (!log || typeof log.sectionId !== 'string') continue;
+      const count = Number(log.count) || 0;
+      if (count > 0) totals.set(log.sectionId, (totals.get(log.sectionId) || 0) + count);
+    }
+    lifetimeRepTotals = totals;
     const pieceTitleById = new Map();
     for (const p of pieces) {
       pieceTitleById.set(p.id, {
@@ -2295,6 +3820,9 @@ function removeQueueSection(sectionId) {
 
 /** Render the queue panel from `queueState`. Hides the panel if empty. */
 function renderReviewQueue() {
+  // The session planner reads the same snapshot — keep it in lockstep with
+  // every queue repaint (rep counts, ratings, deletes, in-flight clicks).
+  renderSessionPlanner();
   const panel = els.reviewQueuePanel;
   const list = els.reviewQueueList;
   const countEl = els.reviewQueueCount;
@@ -3044,11 +4572,321 @@ function currentQueueItems() {
 function startDailyReview() {
   const items = currentQueueItems();
   if (items.length === 0) return;
-  reviewSession = { items, index: 0 };
+  reviewSession = { kind: 'review', items, index: 0 };
   setStatus(
     `Daily review — ${items.length} section${items.length === 1 ? '' : 's'} to go.`,
   );
   handleReviewQueueClick(items[reviewSession.index]);
+}
+
+// --- Plan-a-session (timed sessions, home dashboard) ----------------------
+//
+// "I have N minutes" → buildSessionPlan (srs.js) packs due reviews first,
+// then new sections to learn, into the budget using per-section time
+// estimates from real practice history. Starting the plan reuses the guided
+// review-session machinery with kind 'planned'.
+
+/** Read the persisted session length, clamped to the input's bounds. */
+function readSessionPlanMinutes() {
+  try {
+    const n = parseInt(localStorage.getItem(SESSION_MINUTES_KEY), 10);
+    if (Number.isFinite(n)) {
+      return Math.min(SESSION_MINUTES_MAX, Math.max(SESSION_MINUTES_MIN, n));
+    }
+  } catch (_) {
+    // localStorage unavailable — fall through to the default.
+  }
+  return SESSION_MINUTES_DEFAULT;
+}
+
+/** Persist the session length. Best-effort. */
+function writeSessionPlanMinutes(minutes) {
+  try {
+    localStorage.setItem(SESSION_MINUTES_KEY, String(minutes));
+  } catch (_) {
+    // Unavailable — the value still applies this session.
+  }
+}
+
+/** "~4m" copy for a plan estimate (rounded, floored at 1 minute). */
+function formatPlanEstimate(ms) {
+  return `~${Math.max(1, Math.round((Number(ms) || 0) / 60000))}m`;
+}
+
+/**
+ * Order new-section candidates for the planner: pieces the user has already
+ * started come first (most recently practiced first), and within a piece the
+ * sections follow the pedagogical practice path — so "learn next" means the
+ * next step on the path, not a random section.
+ */
+function orderNewSectionsForPlan(candidates) {
+  if (!queueState || candidates.length === 0) return candidates;
+  const wanted = new Set(candidates.map((s) => s.id));
+  const byPiece = new Map();
+  for (const s of queueState.sections) {
+    if (!s || typeof s.pieceId !== 'string') continue;
+    let group = byPiece.get(s.pieceId);
+    if (!group) {
+      group = { sections: [], started: false, lastPracticed: 0 };
+      byPiece.set(s.pieceId, group);
+    }
+    group.sections.push(s);
+    if (s.lastReviewedDate) group.started = true;
+    if (typeof s.lastPracticedAt === 'number' && s.lastPracticedAt > group.lastPracticed) {
+      group.lastPracticed = s.lastPracticedAt;
+    }
+  }
+  const groups = Array.from(byPiece.values());
+  groups.sort((a, b) => {
+    if (a.started !== b.started) return a.started ? -1 : 1;
+    return b.lastPracticed - a.lastPracticed;
+  });
+  const ordered = [];
+  const seen = new Set();
+  for (const g of groups) {
+    let seq;
+    try {
+      seq = buildPracticeSequence(g.sections);
+    } catch (_) {
+      seq = g.sections;
+    }
+    for (const s of seq) {
+      if (wanted.has(s.id) && !seen.has(s.id)) {
+        ordered.push(s);
+        seen.add(s.id);
+      }
+    }
+  }
+  // Any candidate the grouping missed (e.g. no pieceId) keeps its old spot
+  // at the end rather than silently dropping out of the plan.
+  for (const s of candidates) {
+    if (!seen.has(s.id)) ordered.push(s);
+  }
+  return ordered;
+}
+
+/** Build the current session plan from the live queue snapshot. */
+function currentSessionPlan() {
+  if (!queueState) return null;
+  for (const p of pieces) {
+    queueState.pieceTitleById.set(p.id, {
+      id: p.id,
+      title: p.title,
+      noteCount: p.noteCount,
+    });
+  }
+  return buildSessionPlan({
+    sections: queueState.sections,
+    piecesById: queueState.pieceTitleById,
+    repCountsToday: queueState.countsByDate,
+    lifetimeRepCounts: lifetimeRepTotals,
+    todayISO: queueState.dateISO,
+    minutes: sessionPlanMinutes,
+    repGoal: REP_GOAL,
+    orderNewSections: orderNewSectionsForPlan,
+  });
+}
+
+/** Paint the plan-a-session panel. Hidden when there's nothing to practice. */
+function renderSessionPlanner() {
+  const panel = els.sessionPlanPanel;
+  const list = els.sessionPlanList;
+  if (!panel || !list) return;
+
+  const plan = currentSessionPlan();
+  const hasWork = !!plan && (plan.dueTotal > 0 || plan.newAvailable > 0);
+  if (!hasWork) {
+    panel.hidden = true;
+    list.innerHTML = '';
+    return;
+  }
+  panel.hidden = false;
+
+  // Minutes input + presets (don't clobber the field mid-edit).
+  if (els.sessionPlanMinutes && document.activeElement !== els.sessionPlanMinutes) {
+    els.sessionPlanMinutes.value = String(sessionPlanMinutes);
+  }
+  for (const btn of panel.querySelectorAll('.session-plan-preset')) {
+    btn.classList.toggle(
+      'is-active',
+      Number(btn.dataset.minutes) === sessionPlanMinutes,
+    );
+  }
+
+  // Summary: how much of the box the plan fills.
+  if (els.sessionPlanSummary) {
+    els.sessionPlanSummary.textContent =
+      plan.items.length === 0
+        ? ''
+        : `${formatPlanEstimate(plan.totalMs)} planned · ${plan.budgetMs / 60000}m budget`;
+  }
+
+  // Plan list.
+  list.innerHTML = '';
+  for (const item of plan.items) {
+    const li = document.createElement('li');
+    li.className = 'session-plan-item';
+
+    const info = document.createElement('div');
+    info.className = 'session-plan-item-info';
+    const name = document.createElement('span');
+    name.className = 'session-plan-item-name';
+    name.textContent = item.section.name || '(unnamed section)';
+    info.appendChild(name);
+    const piece = document.createElement('span');
+    piece.className = 'session-plan-item-piece';
+    piece.textContent = item.piece.title || '(unknown piece)';
+    info.appendChild(piece);
+    li.appendChild(info);
+
+    const badge = document.createElement('span');
+    badge.className = `session-plan-item-type ${
+      item.type === 'review' ? 'is-review' : 'is-new'
+    }`;
+    badge.textContent =
+      item.type === 'review'
+        ? item.daysOff < 0
+          ? 'Overdue'
+          : 'Review'
+        : 'Learn';
+    li.appendChild(badge);
+
+    const time = document.createElement('span');
+    time.className = 'session-plan-item-time';
+    time.textContent = formatPlanEstimate(item.estimateMs);
+    li.appendChild(time);
+
+    list.appendChild(li);
+  }
+
+  // Note line: what didn't fit (or that the single item overflows).
+  if (els.sessionPlanNote) {
+    const notes = [];
+    const dueSkipped = plan.dueTotal - plan.dueIncluded;
+    const newSkipped = plan.newAvailable - plan.newIncluded;
+    if (plan.totalMs > plan.budgetMs) {
+      notes.push('This runs slightly over your time — it’s the highest-priority item.');
+    }
+    if (dueSkipped > 0) {
+      notes.push(
+        `${dueSkipped} due review${dueSkipped === 1 ? '' : 's'} didn’t fit — add time to cover the backlog.`,
+      );
+    } else if (newSkipped > 0) {
+      notes.push(
+        `${newSkipped} more section${newSkipped === 1 ? '' : 's'} to learn when you have longer.`,
+      );
+    }
+    els.sessionPlanNote.textContent = notes.join(' ');
+    els.sessionPlanNote.hidden = notes.length === 0;
+  }
+
+  if (els.startSessionPlanBtn) {
+    els.startSessionPlanBtn.disabled = queueClickInFlight || plan.items.length === 0;
+    els.startSessionPlanBtn.textContent =
+      plan.items.length === 0
+        ? '▶ Start session'
+        : `▶ Start session (${plan.items.length} · ${formatPlanEstimate(plan.totalMs)})`;
+  }
+}
+
+/** Commit a new session length and repaint the plan. */
+function setSessionPlanMinutes(minutes) {
+  const n = Math.round(Number(minutes));
+  if (!Number.isFinite(n)) return;
+  sessionPlanMinutes = Math.min(SESSION_MINUTES_MAX, Math.max(SESSION_MINUTES_MIN, n));
+  writeSessionPlanMinutes(sessionPlanMinutes);
+  renderSessionPlanner();
+}
+
+/**
+ * Start a guided run through the planned session — same auto-advance
+ * machinery as the daily review, but over the plan's review+learn mix.
+ */
+function startPlannedSession() {
+  const plan = currentSessionPlan();
+  if (!plan || plan.items.length === 0) return;
+  reviewSession = { kind: 'planned', items: plan.items, index: 0 };
+  setStatus(
+    `Timed session — ${plan.items.length} section${plan.items.length === 1 ? '' : 's'}, ` +
+      `about ${Math.max(1, Math.round(plan.totalMs / 60000))} minutes. Go!`,
+  );
+  handleReviewQueueClick(plan.items[0]);
+}
+
+// --- Guided practice-path run (single piece) -----------------------------
+//
+// A path run reuses the same guided-session plumbing as the daily review
+// (auto-advance after each rating, the session bar, Skip / Stop) but is scoped
+// to ONE piece and walks its pedagogical practice path (buildPracticeSequence)
+// instead of the cross-piece due queue. `reviewSession.kind` distinguishes the
+// two so the shared advance/bar/teardown code can branch where they differ
+// (the path run leaves you on the piece; the daily review returns to the
+// dashboard).
+
+/**
+ * Build path-run items ({section, piece}) from a piece's practice sequence,
+ * optionally starting partway through (from `fromSectionId` onward). Each item
+ * is shaped like a review-queue item so handleReviewQueueClick can open it.
+ */
+function buildPathItems(piece, fromSectionId) {
+  if (!piece || !Array.isArray(piece.sections)) return [];
+  const seq = buildPracticeSequence(piece.sections);
+  let start = 0;
+  if (fromSectionId) {
+    const idx = seq.findIndex((s) => s.id === fromSectionId);
+    if (idx >= 0) start = idx;
+  }
+  const pieceRef = { id: piece.id, title: piece.title };
+  return seq.slice(start).map((section) => ({ section, piece: pieceRef }));
+}
+
+/**
+ * Enter a path run over `items`. When `openFirst` is true the first step is
+ * opened (used when starting from the piece overview); otherwise the caller's
+ * section is already open (used when continuing mid-practice) and we just paint
+ * the session bar.
+ */
+function beginPathRun(items, openFirst) {
+  if (!items || items.length === 0) return;
+  reviewSession = { kind: 'path', items, index: 0 };
+  setStatus(
+    `Practice path — ${items.length} step${items.length === 1 ? '' : 's'}; ` +
+      'finish and rate each to roll on.',
+  );
+  if (openFirst) {
+    handleReviewQueueClick(items[0]);
+  } else {
+    // The current section is already open — refresh the panel so the path bar
+    // shows and the "Up next" rail hides.
+    renderPracticePanel();
+  }
+}
+
+/** Start a path run from the top of the active piece's practice path. */
+function startPathFromTop() {
+  const piece = getActivePiece();
+  const items = buildPathItems(piece, null);
+  if (items.length < 2) {
+    setStatus('This piece needs at least two practice steps to run a path.');
+    return;
+  }
+  beginPathRun(items, true);
+}
+
+/**
+ * Continue the path from the section being practised: auto-advance through the
+ * remaining steps. Called from the "Up next" rail.
+ */
+function startPathFromHere() {
+  const section = getActiveSection();
+  const piece = getActivePiece();
+  if (!section || !piece) return;
+  const items = buildPathItems(piece, section.id);
+  if (items.length < 2) {
+    setStatus('You’re on the last step of the path.');
+    return;
+  }
+  beginPathRun(items, false);
 }
 
 /**
@@ -3068,14 +4906,24 @@ async function advanceReviewSession() {
   await handleReviewQueueClick(sess.items[sess.index]);
 }
 
-/** End the guided review and return to the dashboard. */
+/** End the guided session. Daily review returns to the cross-piece dashboard;
+ * a single-piece path run leaves the user on the piece they're working. */
 function endReviewSession({ completed } = {}) {
+  const kind = reviewSession ? reviewSession.kind : null;
   const wasRunning = !!reviewSession;
   reviewSession = null;
   if (els.reviewSessionBar) els.reviewSessionBar.hidden = true;
-  if (wasRunning) showDashboard();
+  if (wasRunning && kind !== 'path') showDashboard();
   if (completed) {
-    setStatus('Daily review complete — every due section is done. 🎉');
+    setStatus(
+      kind === 'path'
+        ? 'Reached the end of the practice path — great run. 🎉'
+        : kind === 'planned'
+          ? 'Timed session complete — everything you planned is done. 🎉'
+          : 'Daily review complete — every due section is done. 🎉',
+    );
+  } else if (kind === 'path') {
+    setStatus('Stopped the practice path.');
   }
 }
 
@@ -3100,6 +4948,7 @@ function showDashboard() {
  */
 function goHome() {
   closePracticeView({ silent: true });
+  stopPieceListen();
   closeSectionForm();
   showDashboard();
   setStatus('Home — pick a section that’s due, or open a piece from the library.');
@@ -3117,7 +4966,22 @@ function updateReviewSessionBar() {
   if (els.reviewSessionProgress) {
     const pos = reviewSession.index + 1;
     const total = reviewSession.items.length;
-    els.reviewSessionProgress.textContent = `Daily review · ${pos} of ${total}`;
+    const label =
+      reviewSession.kind === 'path'
+        ? 'Practice path'
+        : reviewSession.kind === 'planned'
+          ? 'Timed session'
+          : 'Daily review';
+    let text = `${label} · ${pos} of ${total}`;
+    if (reviewSession.kind === 'planned') {
+      // Estimated time left = the plan estimates for this step onward.
+      let remainingMs = 0;
+      for (let i = reviewSession.index; i < reviewSession.items.length; i++) {
+        remainingMs += Number(reviewSession.items[i].estimateMs) || 0;
+      }
+      if (remainingMs > 0) text += ` · ${formatPlanEstimate(remainingMs)} left`;
+    }
+    els.reviewSessionProgress.textContent = text;
   }
 }
 
@@ -3444,6 +5308,12 @@ async function hydrateFromStorage() {
     for (const meta of stored) {
       pieces.push({ ...meta }); // notes/sections fill in on first select
     }
+    // Bring older libraries up to date (e.g. Bonus → leveled titles, technique
+    // drills moved to the top), then group the list by level to match the
+    // curated manifest.
+    await migrateLibraryTitles();
+    await migrateTechniqueToTop();
+    sortPiecesByCuratedOrder();
     renderPieceList(pieces);
     if (stored.length > 0) {
       setStatus(
@@ -3451,6 +5321,17 @@ async function hydrateFromStorage() {
           ? `Loaded 1 saved piece · v${APP_VERSION}`
           : `Loaded ${stored.length} saved pieces · v${APP_VERSION}`,
       );
+    } else if (
+      typeof window !== 'undefined' &&
+      window.CURATED_LIBRARY_DATA &&
+      typeof handleLoadCuratedLibrary === 'function'
+    ) {
+      // First open with an empty library: auto-seed the curated pieces from the
+      // embedded data so they're ready immediately (works over file://). Each
+      // piece persists as it imports, and re-runs skip what's already there, so
+      // closing mid-import and reopening just finishes the rest.
+      setStatus('First run — loading curated library…');
+      await handleLoadCuratedLibrary();
     } else {
       setStatus(`Ready · v${APP_VERSION}`);
     }
@@ -3621,12 +5502,14 @@ function handleMetronomeBpmChange() {
   const val = parseInt(els.metronomeBpmInput?.value, 10);
   if (Number.isFinite(val)) m.setBpm(val);
   syncMetronomeUI();
+  noteWorkingTempoChange();
 }
 
 function handleMetronomeBpmAdjust(delta) {
   const m = ensureMetronome();
   m.setBpm(m.getBpm() + delta);
   syncMetronomeUI();
+  noteWorkingTempoChange();
 }
 
 function handleMetronomeTap() {
@@ -3638,6 +5521,7 @@ function handleMetronomeTap() {
     m.start();
     syncMetronomeUI();
   }
+  noteWorkingTempoChange();
 }
 
 /** Stop the metronome (called when closing the practice panel). */
@@ -3648,7 +5532,324 @@ function stopMetronome() {
   }
 }
 
+// ===== Tempo goals ==========================================================
+
+/**
+ * On opening a section, restore the metronome to the tempo the user last
+ * practised this section at (`workingTempo`). If there's no saved working
+ * tempo but there IS a goal, seed a slow ramp-up start so the goal is
+ * meaningful from the first session. Sections with neither leave the metronome
+ * untouched (preserving the previous global behaviour). Creating the metronome
+ * controller is cheap — the AudioContext isn't allocated until it actually
+ * starts ticking — so this never makes noise.
+ */
+function initSectionTempo(section) {
+  if (!section) return;
+  const m = ensureMetronome();
+  const working = clampTempo(section.workingTempo);
+  if (working !== null) {
+    m.setBpm(working);
+  } else if (clampTempo(section.targetTempo) !== null) {
+    m.setBpm(suggestStartTempo(section.targetTempo));
+  }
+  syncMetronomeUI();
+}
+
+/**
+ * Mirror the metronome's current BPM onto the active section's in-memory
+ * `workingTempo` so it can be persisted on close and surfaced live. Called
+ * from the metronome change handlers. Cheap, no IDB write.
+ */
+function noteWorkingTempoChange() {
+  const section = getActiveSection();
+  if (!section || !metronome) return;
+  const bpm = clampTempo(metronome.getBpm());
+  if (bpm !== null) section.workingTempo = bpm;
+  renderTempoGoal(section);
+}
+
+/**
+ * When a clean run completes with the metronome running, the metronome's BPM
+ * is the tempo the user just played at. If it beats this section's recorded
+ * best, bank it (in memory + IDB) and return the new best so the caller can
+ * celebrate. Hinted (assisted) runs don't count — they aren't clean-at-tempo.
+ *
+ * @returns {number|null} the new best BPM if it improved, else null
+ */
+function maybeRecordTempoAchievement(section, { hinted } = {}) {
+  if (!section || hinted) return null;
+  if (!metronome || !metronome.isRunning()) return null;
+  const bpm = clampTempo(metronome.getBpm());
+  if (bpm === null) return null;
+  const prevBest = clampTempo(section.bestCleanTempo) || 0;
+  if (bpm <= prevBest) return null;
+  section.bestCleanTempo = bpm;
+  updateSectionTempo(section.id, { bestCleanTempo: bpm }).catch((err) =>
+    console.warn('Failed to persist best clean tempo', err),
+  );
+  return bpm;
+}
+
+/** Persist the active section's working tempo (called on close). */
+function persistWorkingTempo() {
+  const section = getActiveSection();
+  if (!section || !metronome) return;
+  if (isPieceRun()) return; // synthetic section — nothing stored to update
+  const bpm = clampTempo(metronome.getBpm());
+  if (bpm === null) return;
+  section.workingTempo = bpm;
+  updateSectionTempo(section.id, { workingTempo: bpm }).catch((err) =>
+    console.warn('Failed to persist working tempo', err),
+  );
+}
+
+/**
+ * Paint the tempo-goal card from the active section. Two modes: a "set target"
+ * input (no goal yet, or the user is editing) and the active progress view
+ * (working / best / goal readouts + a best-vs-goal bar + a Bump control that
+ * nudges the metronome toward the goal).
+ */
+function renderTempoGoal(section) {
+  const card = els.tempoGoal;
+  if (!card) return;
+  // No tempo goal for a whole-piece play-through (nothing stored to hold it).
+  if (!section || !practiceState || isPieceRun()) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+
+  const summary = tempoGoalSummary(section);
+  const working = metronome ? clampTempo(metronome.getBpm()) : summary.working;
+  const showSet = !summary.hasGoal || tempoGoalEditing;
+
+  if (els.tempoGoalSet) els.tempoGoalSet.hidden = !showSet;
+  if (els.tempoGoalActive) els.tempoGoalActive.hidden = showSet;
+  if (els.tempoGoalCancelBtn) els.tempoGoalCancelBtn.hidden = !summary.hasGoal;
+
+  if (showSet) {
+    // Prefill the input: existing goal when editing, else a suggestion based
+    // on where the metronome sits now (or its default).
+    if (els.tempoGoalInput && document.activeElement !== els.tempoGoalInput) {
+      const prefill = tempoGoalEditing && summary.target
+        ? summary.target
+        : working || DEFAULT_TEMPO_PREFILL;
+      els.tempoGoalInput.value = String(prefill);
+    }
+    if (els.tempoGoalStatus) {
+      els.tempoGoalStatus.textContent = summary.hasGoal
+        ? 'Editing goal'
+        : 'Set a tempo to work up to';
+    }
+    return;
+  }
+
+  // Active (has-goal) view.
+  if (els.tempoGoalWorking) els.tempoGoalWorking.textContent = working ? String(working) : '—';
+  if (els.tempoGoalBest) els.tempoGoalBest.textContent = summary.best ? String(summary.best) : '—';
+  if (els.tempoGoalTarget) els.tempoGoalTarget.textContent = String(summary.target);
+  if (els.tempoGoalFill) els.tempoGoalFill.style.width = `${summary.pct}%`;
+  if (els.tempoGoalTrack) {
+    els.tempoGoalTrack.setAttribute('aria-valuenow', String(summary.pct));
+    els.tempoGoalTrack.classList.toggle('is-complete', summary.reached);
+  }
+  if (els.tempoGoalStatus) {
+    if (summary.reached) {
+      els.tempoGoalStatus.textContent = 'Goal reached 🎉';
+    } else if (summary.best > 0) {
+      els.tempoGoalStatus.textContent = `${summary.remaining} BPM to go`;
+    } else {
+      els.tempoGoalStatus.textContent = 'Run the metronome to log a clean tempo';
+    }
+  }
+  if (els.tempoGoalBumpBtn) {
+    const atTarget = working !== null && summary.target !== null && working >= summary.target;
+    els.tempoGoalBumpBtn.disabled = atTarget;
+    els.tempoGoalBumpBtn.textContent = `Bump +${TEMPO_STEP}`;
+    els.tempoGoalBumpBtn.title = atTarget
+      ? 'Already at your goal tempo'
+      : `Raise the metronome to ${nextWorkingTempo(working, summary.target)} BPM`;
+  }
+}
+
+/** Default BPM to prefill the "set goal" input with when nothing else fits. */
+const DEFAULT_TEMPO_PREFILL = 120;
+
+/** "Set goal" / "Save goal" handler — read the input, validate, persist. */
+function handleTempoGoalSet() {
+  const section = getActiveSection();
+  if (!section || !els.tempoGoalInput) return;
+  const raw = parseInt(els.tempoGoalInput.value, 10);
+  if (!isValidTempo(raw)) {
+    setStatus(`Tempo goal must be between ${TEMPO_MIN} and ${TEMPO_MAX} BPM.`);
+    return;
+  }
+  const target = clampTempo(raw);
+  section.targetTempo = target;
+  tempoGoalEditing = false;
+  updateSectionTempo(section.id, { targetTempo: target }).catch((err) =>
+    console.warn('Failed to persist tempo goal', err),
+  );
+  setStatus(`Tempo goal set to ${target} BPM for "${section.name}".`);
+  renderTempoGoal(section);
+  renderSectionsPanel();
+}
+
+/** "Edit goal" handler — flip the card into its input mode. */
+function handleTempoGoalEdit() {
+  if (!getActiveSection()) return;
+  tempoGoalEditing = true;
+  renderTempoGoal(getActiveSection());
+  if (els.tempoGoalInput) {
+    els.tempoGoalInput.focus();
+    els.tempoGoalInput.select();
+  }
+}
+
+/** "Cancel" (only shown while editing an existing goal). */
+function handleTempoGoalCancel() {
+  tempoGoalEditing = false;
+  renderTempoGoal(getActiveSection());
+}
+
+/**
+ * "Bump" handler — raise the metronome one notch toward the goal and remember
+ * it as the section's working tempo. Starts the metronome if it isn't already
+ * running so the next clean run is captured at the new tempo.
+ */
+function handleTempoGoalBump() {
+  const section = getActiveSection();
+  if (!section) return;
+  const m = ensureMetronome();
+  const summary = tempoGoalSummary(section);
+  if (summary.target === null) return;
+  const next = nextWorkingTempo(m.getBpm(), summary.target);
+  m.setBpm(next);
+  section.workingTempo = next;
+  updateSectionTempo(section.id, { workingTempo: next }).catch(() => {});
+  if (!m.isRunning()) m.start();
+  syncMetronomeUI();
+  renderTempoGoal(section);
+  setStatus(`Metronome raised to ${next} BPM. Aim for a clean run.`);
+}
+
+// ---------------------------------------------------------------------------
+// Settings (QOL menu)
+// ---------------------------------------------------------------------------
+
+/** Apply settings that live outside the player (document-level classes). */
+function applyDocumentSettings() {
+  document.documentElement.classList.toggle(
+    'reduce-motion',
+    !!getSetting('reduceMotion'),
+  );
+}
+
+/** Hand the mounted player a fresh display-settings snapshot (no-op if none). */
+function pushSettingsToPlayer() {
+  if (player && typeof player.applySettings === 'function') {
+    player.applySettings(getAllSettings());
+  }
+}
+
+/**
+ * One-time, on-mount session defaults that have side effects (hand / input
+ * mode). Kept separate from applySettings so a live settings change never
+ * yanks the user's mid-practice hand or input choice back to the default.
+ */
+function applySessionDefaultsToPlayer() {
+  if (!player) return;
+  const hand = getSetting('defaultHand');
+  if (hand === 'rh' || hand === 'lh') player.setHand(hand);
+  if (getSetting('guideKeysDefault') && typeof player.setGuideKeys === 'function') {
+    player.setGuideKeys(true);
+  }
+  if (getSetting('computerKeysDefault')) player.setComputerKeys(true);
+}
+
+/**
+ * Wire the settings dialog: open/close, per-control init + change handlers,
+ * the dark-mode mirror, and reset-to-defaults. Each control's id is
+ * `set-<settingKey>`, so the wiring is table-driven.
+ */
+function setupSettings() {
+  const dialog = document.getElementById('settings-dialog');
+  const openBtn = document.getElementById('settings-btn');
+  if (!dialog || !openBtn) return;
+
+  const checkboxKeys = [
+    'octaveNumbers', 'fallingNoteNames', 'highlightC',
+    'showFingerings', 'guideKeysDefault', 'reduceMotion',
+    'computerKeysDefault', 'noteSound',
+  ];
+  const selectKeys = ['keyNoteNames', 'notation', 'defaultHand'];
+
+  // Reflect the current settings into every control.
+  function syncControls() {
+    for (const key of checkboxKeys) {
+      const el = document.getElementById(`set-${key}`);
+      if (el) el.checked = !!getSetting(key);
+    }
+    for (const key of selectKeys) {
+      const el = document.getElementById(`set-${key}`);
+      if (el) el.value = String(getSetting(key));
+    }
+    const dark = document.getElementById('set-darkMode');
+    if (dark) dark.checked = document.documentElement.classList.contains('dark');
+  }
+
+  // A control changed → persist, then re-apply to the document + live player.
+  function onSettingChanged(key, value) {
+    setSetting(key, value);
+    applyDocumentSettings();
+    pushSettingsToPlayer();
+  }
+
+  for (const key of checkboxKeys) {
+    const el = document.getElementById(`set-${key}`);
+    if (el) el.addEventListener('change', () => onSettingChanged(key, el.checked));
+  }
+  for (const key of selectKeys) {
+    const el = document.getElementById(`set-${key}`);
+    if (el) el.addEventListener('change', () => onSettingChanged(key, el.value));
+  }
+
+  // Dark mode mirrors the header theme toggle (its own storage key).
+  const darkEl = document.getElementById('set-darkMode');
+  if (darkEl) {
+    darkEl.addEventListener('change', () =>
+      applyTheme(darkEl.checked ? 'dark' : 'light'));
+  }
+
+  const close = () => { if (dialog.open) dialog.close(); };
+  openBtn.addEventListener('click', () => {
+    syncControls();
+    if (!dialog.open) dialog.showModal();
+  });
+  const closeBtn = document.getElementById('settings-close-btn');
+  const doneBtn = document.getElementById('settings-done-btn');
+  if (closeBtn) closeBtn.addEventListener('click', close);
+  if (doneBtn) doneBtn.addEventListener('click', close);
+  // Backdrop click closes (native <dialog> reports the click on itself).
+  dialog.addEventListener('click', (e) => { if (e.target === dialog) close(); });
+
+  const resetBtn = document.getElementById('settings-reset-btn');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      for (const [key, val] of Object.entries(SETTINGS_DEFAULTS)) setSetting(key, val);
+      syncControls();
+      applyDocumentSettings();
+      pushSettingsToPlayer();
+      setStatus('Settings reset to defaults.');
+    });
+  }
+}
+
 function init() {
+  // Load persisted QOL settings first so document-level prefs apply pre-render.
+  loadSettings();
+  applyDocumentSettings();
+  setupSettings();
   // --- Dark mode (item 11b) — apply before any rendering so no flash. ------
   applyTheme(getInitialTheme());
   if (els.themeToggle) {
@@ -3690,6 +5891,10 @@ function init() {
     els.loadSampleBtn.addEventListener('click', () => handleLoadSample());
   }
 
+  if (els.loadLibraryBtn) {
+    els.loadLibraryBtn.addEventListener('click', () => handleLoadCuratedLibrary());
+  }
+
   // [Sheet | Synthesia] view toggle.
   if (els.viewSheetBtn) {
     els.viewSheetBtn.addEventListener('click', () => setPieceView('sheet'));
@@ -3698,8 +5903,43 @@ function init() {
     els.viewSynthesiaBtn.addEventListener('click', () => setPieceView('synthesia'));
   }
 
+  // Whole-piece Listen / Play through (piece header).
+  if (els.pieceListenBtn) {
+    els.pieceListenBtn.addEventListener('click', () => togglePieceListen());
+  }
+  if (els.piecePlayBtn) {
+    els.piecePlayBtn.addEventListener('click', () => openPieceRun());
+  }
+
   if (els.resplitBtn) {
     els.resplitBtn.addEventListener('click', () => handleResplitSections());
+  }
+  if (els.startPathBtn) {
+    els.startPathBtn.addEventListener('click', () => startPathFromTop());
+  }
+  if (els.troubleClearBtn) {
+    els.troubleClearBtn.addEventListener('click', () => handleClearTroubleSpots());
+  }
+  if (els.techniqueBtn) {
+    els.techniqueBtn.addEventListener('click', () => {
+      // Toggle, so a second click on the button closes the form again.
+      if (els.techniqueForm && !els.techniqueForm.hidden) closeTechniqueForm();
+      else openTechniqueForm();
+    });
+  }
+  if (els.techniqueForm) {
+    els.techniqueForm.addEventListener('submit', handleTechniqueSubmit);
+  }
+  if (els.techniqueFormCancel) {
+    els.techniqueFormCancel.addEventListener('click', () => closeTechniqueForm());
+  }
+  if (els.techniqueModeInput) {
+    // Major and minor spell the same pitch class differently (E♭ vs D♯), so
+    // the tonic list is rebuilt whenever the mode changes.
+    els.techniqueModeInput.addEventListener('change', () => syncTechniqueTonicOptions());
+  }
+  if (els.techniqueTonicInput) {
+    els.techniqueTonicInput.addEventListener('change', () => renderTechniquePreview());
   }
   if (els.sectionFormCancel) {
     els.sectionFormCancel.addEventListener('click', () => closeSectionForm());
@@ -3745,6 +5985,30 @@ function init() {
     els.statsGoalInc.addEventListener('click', () => adjustDailyGoal(1));
   }
 
+  // Plan-a-session wiring: minutes input, presets, start button.
+  if (els.sessionPlanMinutes) {
+    // Live re-plan while typing; clamp + snap the field on commit.
+    els.sessionPlanMinutes.addEventListener('input', () => {
+      const n = parseInt(els.sessionPlanMinutes.value, 10);
+      if (Number.isFinite(n) && n >= SESSION_MINUTES_MIN && n <= SESSION_MINUTES_MAX) {
+        setSessionPlanMinutes(n);
+      }
+    });
+    els.sessionPlanMinutes.addEventListener('change', () => {
+      const n = parseInt(els.sessionPlanMinutes.value, 10);
+      setSessionPlanMinutes(Number.isFinite(n) ? n : sessionPlanMinutes);
+      els.sessionPlanMinutes.value = String(sessionPlanMinutes);
+    });
+  }
+  if (els.sessionPlanPanel) {
+    for (const btn of els.sessionPlanPanel.querySelectorAll('.session-plan-preset')) {
+      btn.addEventListener('click', () => setSessionPlanMinutes(Number(btn.dataset.minutes)));
+    }
+  }
+  if (els.startSessionPlanBtn) {
+    els.startSessionPlanBtn.addEventListener('click', startPlannedSession);
+  }
+
   // Export/import wiring (item 10).
   if (els.exportBtn) {
     els.exportBtn.addEventListener('click', handleExport);
@@ -3786,6 +6050,25 @@ function init() {
     });
   }
 
+  // --- Tempo-goal wiring ---------------------------------------------------
+  if (els.tempoGoalSetBtn) {
+    els.tempoGoalSetBtn.addEventListener('click', handleTempoGoalSet);
+  }
+  if (els.tempoGoalInput) {
+    els.tempoGoalInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); handleTempoGoalSet(); }
+    });
+  }
+  if (els.tempoGoalEditBtn) {
+    els.tempoGoalEditBtn.addEventListener('click', handleTempoGoalEdit);
+  }
+  if (els.tempoGoalCancelBtn) {
+    els.tempoGoalCancelBtn.addEventListener('click', handleTempoGoalCancel);
+  }
+  if (els.tempoGoalBumpBtn) {
+    els.tempoGoalBumpBtn.addEventListener('click', handleTempoGoalBump);
+  }
+
   renderPieceList(pieces);
   // Sections + practice panels start hidden — only shown when a piece is
   // active and (for practice) when the user clicks Practice on a section.
@@ -3804,11 +6087,13 @@ function init() {
  * Global keyboard shortcut handler (item 11 polish).
  *
  * Shortcuts:
- *   L           — listen to the current section (synth preview).
+ *   L           — listen to the current section (synth preview); on the piece
+ *                 page (no practice open) it plays / stops the whole piece.
  *   R           — restart the current run from the top.
  *   1 / 2 / 3 / 4 — pick Again / Hard / Good / Easy when the rating prompt is
  *                 visible.
- *   Escape      — close practice panel (if open) or close section form.
+ *   Escape      — close practice panel (if open), stop a whole-piece Listen,
+ *                 or close the section form.
  *
  * Guard: suppressed when a text input, textarea, or contenteditable element is
  * focused — the user might be typing a section name. (The player's opt-in
@@ -3834,6 +6119,15 @@ function handleGlobalKeydown(e) {
       if (practising && player) {
         e.preventDefault();
         player.listen();
+      } else if (
+        !practiceState &&
+        activePieceId &&
+        els.viewerMidi &&
+        !els.viewerMidi.hidden
+      ) {
+        // Piece page: hear the whole piece (again to stop).
+        e.preventDefault();
+        togglePieceListen();
       }
       break;
     }
@@ -3872,10 +6166,14 @@ function handleGlobalKeydown(e) {
     }
 
     case 'Escape': {
-      // Esc = close practice panel if open; otherwise close section form.
+      // Esc = close practice panel if open; else stop a whole-piece Listen;
+      // otherwise close the section form.
       if (practiceState) {
         e.preventDefault();
         closePracticeView();
+      } else if (isPieceListening()) {
+        e.preventDefault();
+        stopPieceListen();
       } else if (sectionFormState && els.sectionForm && !els.sectionForm.hidden) {
         e.preventDefault();
         closeSectionForm();

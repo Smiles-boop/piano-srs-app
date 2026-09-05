@@ -6,11 +6,13 @@
 //   - a controls bar (MIDI status, hand toggle, Listen, Restart, computer-keys
 //     toggle).
 //
-// It detects played notes from THREE input sources, all funnelled through one
+// It detects played notes from FOUR input sources, all funnelled through one
 // `pressPitch`/`releasePitch` path:
 //   1. Web MIDI (a connected keyboard) — the primary input,
-//   2. clicking/tapping the on-screen keys,
-//   3. the computer keyboard (opt-in toggle to avoid clashing with the app's
+//   2. the microphone (micpitch.js — polyphonic pitch detection, so an
+//      acoustic piano works with no cable; opt-in toggle),
+//   3. clicking/tapping the on-screen keys,
+//   4. the computer keyboard (opt-in toggle to avoid clashing with the app's
 //      single-letter shortcuts).
 //
 // Grading is WAIT MODE + STRICT CLEAN RUN (the two product decisions):
@@ -19,7 +21,13 @@
 //   - one wrong note restarts the current attempt; only a start-to-finish run
 //     with zero wrong notes counts as a rep (fires `onRepComplete`).
 //
-// Depends on midi.js globals: `notesInSection`, `groupNotesIntoSteps`.
+// `load(piece, section, { strict: false })` relaxes the second rule for a
+// free play-through (the whole-piece "Play" from the piece page): a wrong note
+// is flashed + tallied but the run carries on from where it is, and reaching
+// the end reports the slip count instead of banking a rep.
+//
+// Depends on midi.js globals: `notesInSection`, `groupNotesIntoSteps`, and
+// playback.js: `createPiecePlayback` (Listen).
 
 // ---- Visual + timing constants ------------------------------------------
 const NOTE_AREA_HEIGHT = 240;      // canvas height (CSS px)
@@ -27,6 +35,7 @@ const KEY_AREA_HEIGHT = 96;        // on-screen keyboard height (CSS px)
 const LOOKAHEAD_BEATS = 4;         // how many beats are visible above the hit line
 const PLAYHEAD_EASING = 0.22;      // per-frame lerp toward the active step
 const FLASH_MS = 220;              // key flash duration
+const LISTEN_FLASH_MS = 320;       // key light-up per sounding step during Listen
 
 // ---- Memory mode (cue fading) -------------------------------------------
 const GLANCE_BEATS = 0.75;         // stage 2: notes only appear this close to the line
@@ -39,11 +48,42 @@ const HINT_SHOW_MS = 1600;         // how long the hint ghost stays on the canva
 const WHITE_PC = { 0: 1, 2: 1, 4: 1, 5: 1, 7: 1, 9: 1, 11: 1 };
 const isWhite = (midi) => !!WHITE_PC[((midi % 12) + 12) % 12];
 
+// Pitch-class → name for each notation system (settings menu). German swaps
+// the top two: A♯/B♭ is "B" and B-natural is "H". Solfège is fixed-Do.
+const NOTE_NAME_SETS = {
+  letters: ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'],
+  german:  ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'B', 'H'],
+  solfege: ['Do', 'Do♯', 'Re', 'Re♯', 'Mi', 'Fa', 'Fa♯', 'Sol', 'Sol♯', 'La', 'La♯', 'Si'],
+};
+
+/** Human note name for a MIDI pitch (C4 = 60), honoring the chosen notation. */
+function noteLabel(midi, notation, withOctave) {
+  const set = NOTE_NAME_SETS[notation] || NOTE_NAME_SETS.letters;
+  const name = set[((midi % 12) + 12) % 12];
+  return withOctave ? `${name}${Math.floor(midi / 12) - 1}` : name;
+}
+
 // Computer-keyboard → semitone-offset map (one+ octave, piano-roll style).
 const COMPUTER_KEYS = {
   a: 0, w: 1, s: 2, e: 3, d: 4, f: 5, t: 6, g: 7, y: 8, h: 9, u: 10, j: 11,
   k: 12, o: 13, l: 14, p: 15, ';': 16, "'": 17,
 };
+
+// ---- Shared Web MIDI access ----------------------------------------------
+// One requestMIDIAccess() per page load, shared by every player start().
+// Requesting per-section re-prompted for permission on origins that don't
+// persist the grant (file://, "Allow this time") and stacked up multiple
+// MIDIAccess objects whose inputs each delivered the same key press — the
+// strict grader saw the duplicate as a wrong note. A rejection (denied or
+// dismissed prompt) clears the cache so the next section can ask again.
+let sharedMidiAccessPromise = null;
+function getSharedMidiAccess() {
+  if (!sharedMidiAccessPromise) {
+    sharedMidiAccessPromise = navigator.requestMIDIAccess({ sysex: false });
+    sharedMidiAccessPromise.catch(() => { sharedMidiAccessPromise = null; });
+  }
+  return sharedMidiAccessPromise;
+}
 
 /**
  * @param {HTMLElement} host
@@ -77,6 +117,9 @@ function createPlayer(host, opts = {}) {
     b.className = 'player-hand-btn';
     b.dataset.hand = val;
     b.textContent = label;
+    b.title = val === 'both'
+      ? 'Both hands together — clean runs here bank toward your daily reps'
+      : 'Warm-up hand — practise freely; only Both-hands runs bank reps';
     b.addEventListener('click', () => setHand(val));
     handGroup.appendChild(b);
     handButtons[val] = b;
@@ -101,6 +144,16 @@ function createPlayer(host, opts = {}) {
   keysToggle.textContent = '⌨ Computer keys: off';
   keysToggle.addEventListener('click', () => setComputerKeys(!computerKeysOn));
 
+  // Microphone input: hear the notes from an acoustic (or any) piano instead
+  // of requiring a MIDI cable. Opt-in per session — it asks for mic permission.
+  const micToggle = document.createElement('button');
+  micToggle.type = 'button';
+  micToggle.className = 'btn btn-sm player-mic-toggle';
+  micToggle.setAttribute('aria-pressed', 'false');
+  micToggle.textContent = '🎤 Mic: off';
+  micToggle.title = 'Detect notes through your microphone — no MIDI cable needed';
+  micToggle.addEventListener('click', () => setMic(!micWanted));
+
   // Suggested fingerings (computed at import by fingering.js) drawn as
   // digits on the falling notes. On by default; toggleable since they're
   // heuristic and the user may prefer their own.
@@ -117,6 +170,18 @@ function createPlayer(host, opts = {}) {
     fingersToggle.setAttribute('aria-pressed', String(showFingers));
     draw();
   });
+
+  // Guide keys: light up the next note(s) on the on-screen keyboard at any
+  // memory stage. Beyond stage 0 that's real help, so guided runs count as
+  // half reps (same rule as hesitation hints).
+  let guideKeys = false;
+  const guideToggle = document.createElement('button');
+  guideToggle.type = 'button';
+  guideToggle.className = 'btn btn-sm player-guide-toggle';
+  guideToggle.setAttribute('aria-pressed', 'false');
+  guideToggle.textContent = '💡 Guide keys';
+  guideToggle.title = 'Light up the next notes on the keyboard';
+  guideToggle.addEventListener('click', () => setGuideKeys(!guideKeys));
 
   // Hold-to-reveal: temporarily forces full visuals while held.
   const peekBtn = document.createElement('button');
@@ -136,11 +201,28 @@ function createPlayer(host, opts = {}) {
   memoryChip.className = 'player-memory';
   memoryChip.setAttribute('aria-live', 'polite');
 
-  controls.append(midiStatus, memoryChip, handGroup, listenBtn, restartBtn, peekBtn, fingersToggle, keysToggle);
+  controls.append(midiStatus, memoryChip, handGroup, listenBtn, restartBtn, peekBtn, guideToggle, fingersToggle, keysToggle, micToggle);
 
   const feedback = document.createElement('p');
   feedback.className = 'player-feedback';
   feedback.setAttribute('aria-live', 'polite');
+
+  // Per-run progress: how far through the section the current attempt is.
+  // Resets with the run (mistake or completion), unlike the reps counter.
+  const runProgress = document.createElement('div');
+  runProgress.className = 'player-run-progress';
+  runProgress.hidden = true; // shown once a section with notes is loaded
+  const runProgressLabel = document.createElement('span');
+  runProgressLabel.className = 'player-run-progress-label';
+  const runProgressTrack = document.createElement('div');
+  runProgressTrack.className = 'player-run-progress-track';
+  runProgressTrack.setAttribute('role', 'progressbar');
+  runProgressTrack.setAttribute('aria-label', 'Progress through this run');
+  runProgressTrack.setAttribute('aria-valuemin', '0');
+  const runProgressFill = document.createElement('div');
+  runProgressFill.className = 'player-run-progress-fill';
+  runProgressTrack.appendChild(runProgressFill);
+  runProgress.append(runProgressLabel, runProgressTrack);
 
   const canvas = document.createElement('canvas');
   canvas.className = 'player-canvas';
@@ -148,7 +230,7 @@ function createPlayer(host, opts = {}) {
   const keyboard = document.createElement('div');
   keyboard.className = 'player-keyboard';
 
-  host.append(controls, feedback, canvas, keyboard);
+  host.append(controls, feedback, runProgress, canvas, keyboard);
 
   // ---- State ----
   const ctx2d = canvas.getContext('2d');
@@ -168,6 +250,22 @@ function createPlayer(host, opts = {}) {
   let stepIndex = 0;
   let runStarted = false;
   let cleanRunCount = 0;      // reps completed this session (display only)
+  // Strict (default): a wrong note resets the run. Lenient (play-through): it
+  // is flashed + counted and the run carries on.
+  let strictRuns = true;
+  let slipsThisRun = 0;       // wrong notes so far in a lenient run
+
+  // Display prefs from the settings menu (app pushes these via applySettings).
+  // Defaults mirror settings.js so the player is sane if never configured.
+  let ui = {
+    keyNoteNames: 'c',
+    notation: 'letters',
+    octaveNumbers: false,
+    fallingNoteNames: false,
+    highlightC: false,
+    reduceMotion: false,
+    noteSound: true,
+  };
 
   // ---- Memory mode (cue fading) ----
   let baseStage = 0;          // maturity baseline (set by app from SRS state)
@@ -197,9 +295,11 @@ function createPlayer(host, opts = {}) {
   let lastProgressAt = 0;        // performance.now() of the last run progress
   let hintsThisRun = 0;
   let hintShownAt = 0;           // performance.now() when the ghost appeared
+  let guidedThisRun = false;     // key guides used beyond stage 0 this run
 
   // Web MIDI
   let midiAccess = null;
+  let midiConnectToken = 0; // invalidates stale connectMidi resolutions
   const midiInputs = new Set();
 
   // Computer keyboard
@@ -207,11 +307,18 @@ function createPlayer(host, opts = {}) {
   let computerBase = 60;
   const computerHeld = new Set();
 
-  // Synth (Listen)
+  // Microphone (micpitch.js)
+  let micWanted = false;  // user's toggle intent — survives stop()/start()
+  let micInput = null;    // createMicPitch controller (lazy)
+  let micStartToken = 0;  // invalidates stale async start() resolutions
+
+  // Synth (Listen) — playback.js engine sharing this player's AudioContext.
+  // While it plays, `listenTick` is the onset the playhead / sheet cursor
+  // follow (null when not listening).
   let audioCtx = null;
   let synthPlaying = false;
-  let synthTimers = [];
-  let synthNodes = [];
+  let preview = null;
+  let listenTick = null;
 
   // ---- Hand filtering ----
   function computeHands(notes) {
@@ -242,6 +349,7 @@ function createPlayer(host, opts = {}) {
 
   // ---- Load a section ----
   function load(piece, sec, loadOpts = {}) {
+    stopListen(); // never carry a previous section's playback across a load
     section = sec;
     ticksPerQuarter = piece.ticksPerQuarter || 480;
     allSectionNotes = notesInSection(piece.notes || [], sec);
@@ -249,9 +357,11 @@ function createPlayer(host, opts = {}) {
     // SRS maturity (app passes it in).
     baseStage = typeof loadOpts.baseStage === 'number' ? loadOpts.baseStage : 0;
     runIndex = typeof loadOpts.runIndex === 'number' ? loadOpts.runIndex : 0;
+    strictRuns = loadOpts.strict !== false;
     assist = 0;
     consecutiveResets = 0;
     peeking = false;
+    feedback.textContent = ''; // let restartRun() write the opening prompt
     computeHands(allSectionNotes);
     syncHandButtons();
     rebuild();
@@ -305,6 +415,37 @@ function createPlayer(host, opts = {}) {
 
   function getStage() {
     return currentStage();
+  }
+
+  /**
+   * Push a settings-menu snapshot into the player and re-render everything it
+   * can touch: keyboard labels / hover titles / C-highlight, the fingering
+   * layer, and the falling-note names. Safe to call whenever a section is
+   * loaded — the app calls it on mount and on every settings change.
+   */
+  function applySettings(s) {
+    s = s || {};
+    ui = {
+      keyNoteNames: s.keyNoteNames || 'c',
+      notation: s.notation || 'letters',
+      octaveNumbers: !!s.octaveNumbers,
+      fallingNoteNames: !!s.fallingNoteNames,
+      highlightC: !!s.highlightC,
+      reduceMotion: !!s.reduceMotion,
+      noteSound: s.noteSound !== false,
+    };
+    // Fingerings keep their live toggle button — mirror the saved setting onto
+    // it so the two never disagree on mount.
+    if (typeof s.showFingerings === 'boolean') {
+      showFingers = s.showFingerings;
+      fingersToggle.classList.toggle('is-active', showFingers);
+      fingersToggle.setAttribute('aria-pressed', String(showFingers));
+    }
+    if (section) {
+      buildKeyboard();     // re-render key labels / titles / C-highlight
+      refreshKeyClasses(); // restore is-expected / is-held after the rebuild
+    }
+    draw();
   }
 
   function setHand(h) {
@@ -376,9 +517,19 @@ function createPlayer(host, opts = {}) {
       key.type = 'button';
       key.className = 'player-key player-key-white';
       key.dataset.midi = String(midi);
-      if (midi % 12 === 0) {
+      // Hover any key for its full note name (always on, independent of labels).
+      key.title = noteLabel(midi, ui.notation, true);
+      if (ui.highlightC && midi % 12 === 0) key.classList.add('is-c');
+      const wantLabel =
+        ui.keyNoteNames === 'all' ||
+        (ui.keyNoteNames === 'c' && midi % 12 === 0);
+      if (wantLabel) {
         const lbl = document.createElement('span');
-        lbl_set(lbl, midi);
+        lbl.className = 'player-key-label';
+        // C-only labels always carry the octave (that landmark is the point);
+        // "all keys" labels follow the octave-number toggle.
+        const withOct = ui.octaveNumbers || ui.keyNoteNames === 'c';
+        lbl.textContent = noteLabel(midi, ui.notation, withOct);
         key.appendChild(lbl);
       }
       attachKeyPointer(key, midi);
@@ -395,6 +546,7 @@ function createPlayer(host, opts = {}) {
       key.type = 'button';
       key.className = 'player-key player-key-black';
       key.dataset.midi = String(m);
+      key.title = noteLabel(m, ui.notation, true); // hover shows the note name
       key.style.left = `calc(${((leftWhiteIdx + 1) / whiteMidis.length) * 100}% - var(--black-half))`;
       attachKeyPointer(key, m);
       blackLayer.appendChild(key);
@@ -402,11 +554,6 @@ function createPlayer(host, opts = {}) {
     }
 
     keyboard.append(whiteLayer, blackLayer);
-  }
-
-  function lbl_set(span, midi) {
-    span.className = 'player-key-label';
-    span.textContent = `C${Math.floor(midi / 12) - 1}`;
   }
 
   function attachKeyPointer(key, midi) {
@@ -423,11 +570,24 @@ function createPlayer(host, opts = {}) {
     });
   }
 
+  function setGuideKeys(on) {
+    guideKeys = !!on;
+    guideToggle.classList.toggle('is-active', guideKeys);
+    guideToggle.setAttribute('aria-pressed', String(guideKeys));
+    if (guideKeys && currentStage() > 0) {
+      feedback.textContent =
+        '💡 Key guides on — at memory stages, guided runs count as half reps.';
+      feedback.classList.remove('is-error', 'is-success');
+    }
+    refreshKeyClasses();
+  }
+
   function refreshKeyClasses() {
     const cur = steps[stepIndex];
-    // Key guides only at stage 0 (Watch). Higher stages hide them so you must
-    // find the keys / play from memory; correct/wrong flashes still fire.
-    const showGuides = currentStage() === 0;
+    // Key guides only at stage 0 (Watch), unless the user opts in via the
+    // Guide-keys toggle. Higher stages otherwise hide them so you must find
+    // the keys / play from memory; correct/wrong flashes still fire.
+    const showGuides = guideKeys || currentStage() === 0;
     for (const [midi, el] of keyEls) {
       el.classList.toggle('is-held', heldPitches.has(midi));
       const expected =
@@ -448,9 +608,34 @@ function createPlayer(host, opts = {}) {
     );
   }
 
+  /** Paint the per-run progress bar from stepIndex / steps.length. */
+  function updateRunProgress() {
+    const total = steps.length;
+    runProgress.hidden = total === 0;
+    if (!total) return;
+    const done = Math.min(stepIndex, total);
+    runProgressLabel.textContent = `Note ${Math.min(stepIndex + 1, total)} of ${total}`;
+    runProgressTrack.setAttribute('aria-valuemax', String(total));
+    runProgressTrack.setAttribute('aria-valuenow', String(done));
+    runProgressFill.style.width = `${(done / total) * 100}%`;
+  }
+
+  /** Brief color pulse on the run bar (run complete / run reset). */
+  function pulseRunProgress(cls) {
+    runProgress.classList.add(cls);
+    const prev = flashTimers.get(`runbar:${cls}`);
+    if (prev) clearTimeout(prev);
+    flashTimers.set(
+      `runbar:${cls}`,
+      setTimeout(() => runProgress.classList.remove(cls), 700),
+    );
+  }
+
   // ---- The wait-mode state machine ----
   function pressPitch(midi) {
-    if (audioCtx) ping(midi); // audible feedback for on-screen/computer input
+    // Audible feedback for on-screen/computer input — but never while the mic
+    // listens: the speaker's ping would be picked up as another (wrong) note.
+    if (audioCtx && ui.noteSound && !micWanted) ping(midi);
     heldPitches.add(midi);
     if (!steps.length) { refreshKeyClasses(); return; }
 
@@ -458,13 +643,16 @@ function createPlayer(host, opts = {}) {
     if (cur.need.has(midi)) {
       runStarted = true;
       lastProgressAt = performance.now();
+      if (guideKeys && currentStage() > 0) guidedThisRun = true;
       cur.got.add(midi);
       flashKey(midi, 'is-correct');
       if (cur.got.size >= cur.need.size) advanceStep();
     } else {
-      // Wrong note → strict reset of the whole attempt.
+      // Wrong note → strict reset of the whole attempt (or, in a lenient
+      // play-through, a tallied slip that leaves the run where it is).
       flashKey(midi, 'is-wrong');
-      handleMistake(midi);
+      if (strictRuns) handleMistake(midi);
+      else handleSlip(midi);
     }
     refreshKeyClasses();
   }
@@ -476,19 +664,43 @@ function createPlayer(host, opts = {}) {
 
   function advanceStep() {
     stepIndex++;
-    if (stepIndex >= steps.length) {
-      // Clean run complete. Runs that needed hesitation hints still finish
-      // (no mid-run nuke), but the app counts them as half reps.
-      const hints = hintsThisRun;
-      cleanRunCount++;
-      consecutiveResets = 0; // got all the way through → no longer struggling
-      feedback.textContent =
-        hints > 0
-          ? `✓ Run complete — with ${hints} hint${hints === 1 ? '' : 's'}.`
-          : '✓ Clean run!';
+    if (stepIndex >= steps.length && !strictRuns) {
+      // Lenient play-through reached the end: report the slip tally rather
+      // than banking a rep, then reset to the top for another go.
+      const slips = slipsThisRun;
+      feedback.textContent = slips
+        ? `✓ Played to the end — ${slips} wrong note${slips === 1 ? '' : 's'} along the way.`
+        : '✓ Played to the end — not a single wrong note!';
       feedback.classList.remove('is-error');
       feedback.classList.add('is-success');
-      onRepComplete({ hinted: hints > 0, hints });
+      pulseRunProgress('is-complete');
+      onRepComplete({ strict: false, mistakes: slips, hand, hinted: false, hints: 0, guided: false });
+      restartRun(false);
+      return;
+    }
+    if (stepIndex >= steps.length) {
+      // Clean run complete. Runs that needed hesitation hints (or key guides
+      // beyond stage 0) still finish, but the app counts them as half reps.
+      const hints = hintsThisRun;
+      const guided = guidedThisRun;
+      // A two-handed section only banks a rep when you play hands together —
+      // hands-separate runs are free warm-up. Mono sections have no separate
+      // hands (RH/LH are disabled), so they always count.
+      const counts = hand === 'both' || !hasHands;
+      consecutiveResets = 0; // got all the way through → no longer struggling
+      if (counts) cleanRunCount++;
+      feedback.textContent = !counts
+        ? `✓ Clean ${hand === 'rh' ? 'right' : 'left'}-hand run — warm-up. Switch to Both hands to bank a rep.`
+        : hints > 0
+          ? `✓ Run complete — with ${hints} hint${hints === 1 ? '' : 's'}.`
+          : guided
+            ? '✓ Run complete — with key guides.'
+            : '✓ Clean run!';
+      feedback.classList.remove('is-error');
+      feedback.classList.add('is-success');
+      pulseRunProgress('is-complete');
+      // Only hands-together (or mono) runs feed the rep goal / SRS pipeline.
+      if (counts) onRepComplete({ strict: true, hinted: hints > 0 || guided, hints, guided });
       // Reset for the next rep. We deliberately do NOT auto-satisfy held keys:
       // each step is advanced only by a fresh key press, which keeps repeated
       // notes (e.g. "C C") honest and matches how wait-mode trainers behave.
@@ -496,6 +708,7 @@ function createPlayer(host, opts = {}) {
       // ever judged, so a held note can neither complete nor fail a later step.
       restartRun(false);
     } else {
+      updateRunProgress();
       // `tick` is the absolute MIDI tick of the now-current step, so a sheet
       // cursor can snap to the matching onset in the score.
       onProgress({
@@ -516,6 +729,7 @@ function createPlayer(host, opts = {}) {
     if (stageNow >= 2 && cur) {
       for (const p of cur.need) flashKey(p, 'is-reveal', REVEAL_MS);
     }
+    pulseRunProgress('is-reset');
     restartRun(false);
     // Auto-assist: too many resets in a row → ease one stage (more help).
     consecutiveResets++;
@@ -529,7 +743,36 @@ function createPlayer(host, opts = {}) {
     }
     feedback.classList.add('is-error');
     feedback.classList.remove('is-success');
-    onMistake({ midi, atStep: wasAt });
+    // `tick` is what makes a mistake locatable in the piece rather than just
+    // in this run — the app aggregates by it to find recurring trouble spots.
+    onMistake({
+      midi,
+      atStep: wasAt,
+      tick: cur ? cur.tick : null,
+      expected: cur ? [...cur.need] : [],
+      reset: true,
+    });
+  }
+
+  /**
+   * Lenient counterpart of handleMistake for a play-through: flash, tally,
+   * tell the app (so trouble spots still learn from it) — but stay put. The
+   * step still waits for its correct note(s), so the run can't drift.
+   */
+  function handleSlip(midi) {
+    const cur = steps[stepIndex];
+    slipsThisRun++;
+    pulseRunProgress('is-reset');
+    feedback.textContent = `✗ Wrong note — keep going. (${slipsThisRun} so far this run)`;
+    feedback.classList.add('is-error');
+    feedback.classList.remove('is-success');
+    onMistake({
+      midi,
+      atStep: stepIndex,
+      tick: cur ? cur.tick : null,
+      expected: cur ? [...cur.need] : [],
+      reset: false,
+    });
   }
 
   /**
@@ -553,18 +796,35 @@ function createPlayer(host, opts = {}) {
     runStarted = false;
     hintsThisRun = 0;
     hintShownAt = 0;
+    guidedThisRun = false;
+    slipsThisRun = 0;
     lastProgressAt = performance.now();
     rollCloze();
     for (const s of steps) s.got = new Set();
+    updateRunProgress();
     if (announce) {
-      feedback.textContent = 'Run reset — play the highlighted notes.';
+      feedback.textContent = strictRuns
+        ? 'Run reset — play the highlighted notes.'
+        : 'Back to the top — play it through.';
       feedback.classList.remove('is-error', 'is-success');
     } else if (!feedback.textContent) {
-      feedback.textContent = steps.length
-        ? 'Play the highlighted notes.'
-        : 'No notes in this section.';
+      feedback.textContent = !steps.length
+        ? 'No notes in this section.'
+        : strictRuns
+          ? 'Play the highlighted notes.'
+          : 'Play it through from the top — wrong notes are counted, not punished.';
     }
     refreshKeyClasses();
+    // Re-sync any follow-cursor (engraved score) to the reset: the current step
+    // is the first one again, so snap the cursor back to the top. Without this,
+    // an explicit Restart (button / R key / reset-reps) left the sheet cursor
+    // parked mid-section even though the engine reset — making the button look
+    // like a no-op. The Synthesia playhead already eases back on its own.
+    onProgress({
+      stepIndex,
+      total: steps.length,
+      tick: steps[stepIndex] ? steps[stepIndex].tick : null,
+    });
   }
 
   function getCleanRunCount() {
@@ -581,11 +841,17 @@ function createPlayer(host, opts = {}) {
       midiStatus.classList.add('is-warn');
       return;
     }
+    const token = ++midiConnectToken;
     try {
-      midiAccess = await navigator.requestMIDIAccess({ sysex: false });
+      const access = await getSharedMidiAccess();
+      // A newer start()/stop() superseded this connection attempt while the
+      // permission prompt was up — leave the newer one's bindings alone.
+      if (token !== midiConnectToken || !running) return;
+      midiAccess = access;
       bindMidiInputs();
       midiAccess.onstatechange = bindMidiInputs;
     } catch (err) {
+      if (token !== midiConnectToken) return;
       midiStatus.textContent = 'MIDI: permission denied (use on-screen / computer keys)';
       midiStatus.classList.add('is-warn');
     }
@@ -616,6 +882,57 @@ function createPlayer(host, opts = {}) {
     const cmd = status & 0xf0;
     if (cmd === 0x90 && velocity > 0) pressPitch(note);
     else if (cmd === 0x80 || (cmd === 0x90 && velocity === 0)) releasePitch(note);
+  }
+
+  // ---- Microphone input (micpitch.js) ----
+  // The detector emits the same integer-MIDI press/release events as Web MIDI,
+  // so everything downstream (grader, visuals, SRS) is shared. It is
+  // score-informed: we hand it the current step's needed pitches so real
+  // playing is detected reliably while stray sounds must clear a high bar
+  // before they can reset a strict run.
+  async function setMic(on) {
+    micWanted = on;
+    micToggle.setAttribute('aria-pressed', String(on));
+    micToggle.classList.toggle('is-active', on);
+    micToggle.textContent = `🎤 Mic: ${on ? 'on' : 'off'}`;
+    const token = ++micStartToken;
+    if (!on) {
+      if (micInput) micInput.stop();
+      return;
+    }
+    if (typeof createMicPitch !== 'function') {
+      feedback.textContent = 'Mic input unavailable (micpitch.js not loaded).';
+      feedback.classList.add('is-error');
+      setMicOff();
+      return;
+    }
+    if (!micInput) {
+      micInput = createMicPitch({
+        onNoteOn: (m) => pressPitch(m),
+        onNoteOff: (m) => releasePitch(m),
+        onStatus: (text, level) => {
+          feedback.textContent = text;
+          feedback.classList.toggle('is-error', level === 'error');
+          if (level !== 'error') feedback.classList.remove('is-success');
+        },
+        // Score-informed detection: the pitches the current step still needs.
+        getExpected: () => (steps[stepIndex] ? steps[stepIndex].need : null),
+      });
+    }
+    const ok = await micInput.start();
+    // The toggle changed again (or the session stopped) while permission was
+    // pending — respect the newer state.
+    if (token !== micStartToken) { if (!micWanted && micInput) micInput.stop(); return; }
+    if (!ok) setMicOff();
+    else if (synthPlaying) micInput.setSuppressed(true);
+  }
+
+  /** Reset the toggle UI without touching feedback (used on start failure). */
+  function setMicOff() {
+    micWanted = false;
+    micToggle.setAttribute('aria-pressed', 'false');
+    micToggle.classList.remove('is-active');
+    micToggle.textContent = '🎤 Mic: off';
   }
 
   // ---- Computer-keyboard input (opt-in) ----
@@ -690,42 +1007,76 @@ function createPlayer(host, opts = {}) {
     osc.stop(t + 0.45);
   }
 
+  /**
+   * Play the loaded notes (current hand filter) through the shared playback
+   * engine. While it plays, each sounding step lights its keys, scrolls the
+   * falling-note playhead, and is reported through `onProgress` with
+   * `listening: true` so the app can walk the sheet cursor along with it.
+   */
   function listen() {
     const c = ensureAudio();
     if (!c || !activeNotes.length) return;
-    stopListen();
-    synthPlaying = true;
-    listenBtn.textContent = '■ Stop';
-    const base = section.startSec;
-    const lead = 0.2;
-    let lastEnd = 0;
-    for (const n of activeNotes) {
-      const start = c.currentTime + lead + (n.startSec - base);
-      const dur = Math.max(0.12, n.endSec - n.startSec);
-      lastEnd = Math.max(lastEnd, start + dur);
-      const osc = c.createOscillator();
-      const gain = c.createGain();
-      osc.type = 'triangle';
-      osc.frequency.value = midiToFreq(n.midi);
-      gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.exponentialRampToValueAtTime(0.22, start + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
-      osc.connect(gain).connect(c.destination);
-      osc.start(start);
-      osc.stop(start + dur + 0.05);
-      synthNodes.push(osc);
+    if (typeof createPiecePlayback !== 'function') return;
+    if (!preview) {
+      preview = createPiecePlayback({
+        audioContext: () => audioCtx,
+        onStep: onListenStep,
+        onEnd: onListenEnd,
+      });
     }
-    const stopAt = (lastEnd - c.currentTime) * 1000 + 100;
-    synthTimers.push(setTimeout(stopListen, stopAt));
+    // Anchor t=0 at the section start so a hand's lead-in rest is kept.
+    const started = preview.play(activeNotes, {
+      ticksPerQuarter,
+      fromSec: section ? section.startSec : undefined,
+    });
+    if (!started) return;
+    synthPlaying = true;
+    // Don't let the mic hear our own playback as played notes.
+    if (micInput) micInput.setSuppressed(true);
+    listenBtn.textContent = '■ Stop';
+    listenBtn.classList.add('is-active');
+    listenBtn.setAttribute('aria-pressed', 'true');
+  }
+
+  function onListenStep(step) {
+    listenTick = step.tick;
+    for (const p of step.pitches) flashKey(p, 'is-playing', LISTEN_FLASH_MS);
+    onProgress({
+      stepIndex,
+      total: steps.length,
+      tick: step.tick,
+      listening: true,
+      listenIndex: step.index,
+      listenTotal: step.total,
+    });
+  }
+
+  function onListenEnd() {
+    const wasListening = synthPlaying;
+    synthPlaying = false;
+    listenTick = null;
+    if (micInput) micInput.setSuppressed(false);
+    listenBtn.textContent = '▶ Listen';
+    listenBtn.classList.remove('is-active');
+    listenBtn.setAttribute('aria-pressed', 'false');
+    if (wasListening) {
+      // Hand the follow-cursor back to the run in progress.
+      onProgress({
+        stepIndex,
+        total: steps.length,
+        tick: steps[stepIndex] ? steps[stepIndex].tick : null,
+        listening: false,
+      });
+    }
   }
 
   function stopListen() {
-    synthPlaying = false;
-    listenBtn.textContent = '▶ Listen';
-    synthTimers.forEach(clearTimeout);
-    synthTimers = [];
-    synthNodes.forEach((o) => { try { o.stop(); } catch (_) {} });
-    synthNodes = [];
+    if (preview) preview.stop(); // → onListenEnd if it was playing
+    onListenEnd();               // idempotent: also resets the button if idle
+  }
+
+  function isListening() {
+    return synthPlaying;
   }
 
   // ---- Rendering ----
@@ -775,7 +1126,11 @@ function createPlayer(host, opts = {}) {
 
     // Memory mode gates how much of the falling-note stream is drawn.
     const stage = currentStage();
-    const curTick = steps[stepIndex] ? steps[stepIndex].tick : playheadTick;
+    // While Listen plays, the sounding step is the "current" one so passed
+    // notes dim and the chord at the hit line is outlined, as in a live run.
+    const curTick = listenTick !== null
+      ? listenTick
+      : steps[stepIndex] ? steps[stepIndex].tick : playheadTick;
     const hintActive =
       hintShownAt > 0 && performance.now() - hintShownAt < HINT_SHOW_MS;
 
@@ -824,6 +1179,14 @@ function createPlayer(host, opts = {}) {
         ctx2d.font = 'bold 10px system-ui, sans-serif';
         ctx2d.textAlign = 'center';
         ctx2d.fillText(String(n.finger), cx, yOnset - 4);
+      }
+      // Note-name letter near the top of the note (settings menu).
+      if (ui.fallingNoteNames && h >= 13 && w >= 11) {
+        ctx2d.globalAlpha = 1;
+        ctx2d.fillStyle = '#f8fafc';
+        ctx2d.font = 'bold 9px system-ui, sans-serif';
+        ctx2d.textAlign = 'center';
+        ctx2d.fillText(noteLabel(n.midi, ui.notation, ui.octaveNumbers), cx, yTop + 10);
       }
     }
     if (hintActive) drawHintGhost(hitY, pxPerTick);
@@ -918,10 +1281,17 @@ function createPlayer(host, opts = {}) {
 
   function frame() {
     if (!running) return;
-    const target = steps[stepIndex] ? steps[stepIndex].tick
+    // Listen drives the playhead through the notes; otherwise it parks on the
+    // step the run is waiting for.
+    const target = listenTick !== null ? listenTick
+      : steps[stepIndex] ? steps[stepIndex].tick
       : (section ? section.endTick : playheadTick);
-    playheadTick += (target - playheadTick) * PLAYHEAD_EASING;
-    if (Math.abs(target - playheadTick) < 0.5) playheadTick = target;
+    if (ui.reduceMotion) {
+      playheadTick = target; // snap — no eased scroll
+    } else {
+      playheadTick += (target - playheadTick) * PLAYHEAD_EASING;
+      if (Math.abs(target - playheadTick) < 0.5) playheadTick = target;
+    }
     maybeHint();
     draw();
     rafId = requestAnimationFrame(frame);
@@ -931,9 +1301,16 @@ function createPlayer(host, opts = {}) {
   const onResize = () => resize();
 
   function start() {
+    // "Practice next" re-starts the same player without closing the panel in
+    // between — tear the old session down first so we never stack duplicate
+    // window listeners, RAF loops, or MIDI bindings.
+    if (running) stop();
     running = true;
     playheadTick = steps[0] ? steps[0].tick : 0;
     connectMidi();
+    // Mic was on when the previous section stopped → re-arm it (permission is
+    // already granted, so this reconnects silently).
+    if (micWanted) setMic(true);
     window.addEventListener('keydown', onComputerKeyDown, true);
     window.addEventListener('keyup', onComputerKeyUp, true);
     window.addEventListener('resize', onResize);
@@ -955,12 +1332,19 @@ function createPlayer(host, opts = {}) {
     midiInputs.forEach((i) => { i.onmidimessage = null; });
     midiInputs.clear();
     if (midiAccess) midiAccess.onstatechange = null;
+    // Release the microphone while practice is closed (privacy); keep
+    // micWanted so the next start() re-arms it.
+    micStartToken++;
+    if (micInput) micInput.stop();
     heldPitches.clear();
     computerHeld.clear();
   }
 
   function dispose() {
     stop();
+    if (micInput) { micInput.dispose(); micInput = null; }
+    micWanted = false;
+    if (preview) { preview.dispose(); preview = null; }
     if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
     for (const t of flashTimers.values()) clearTimeout(t);
     flashTimers.clear();
@@ -975,11 +1359,16 @@ function createPlayer(host, opts = {}) {
     dispose,
     restartRun,
     listen,
+    stopListen,
+    isListening,
     pressPitch,
     releasePitch,
     getCleanRunCount,
     resetCleanRunCount,
     setComputerKeys: (on) => setComputerKeys(on),
+    setMic: (on) => setMic(on),
+    setGuideKeys: (on) => setGuideKeys(on),
+    applySettings,
     setMemoryBase,
     setRunIndex,
     setPeek,

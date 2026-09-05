@@ -86,6 +86,59 @@ const mod = await import('../db.js');
 assert.equal(mod.metadataFromRecord(null), null, 'null-safe');
 assert.equal(mod.metadataFromRecord(undefined), null, 'undefined-safe');
 
+// --- sectionToRecord: technique specs ---
+//
+// A technique drill stores a spec, not notes — the note array is regenerated
+// at practice time. The record must carry it through intact, and must never
+// let a malformed one reach IDB.
+{
+  const base = {
+    id: 's_1', pieceId: 'p_1', name: 'Scale · D major',
+    startTick: 0, endTick: 6960, startSec: 0, endSec: 9.66,
+    noteCount: 58, notes: '', addedAt: 1000, order: 40,
+  };
+  const rec = mod.sectionToRecord({
+    ...base, kind: 'technique',
+    technique: { drill: 'scale', tonic: 2, mode: 'major' },
+  });
+  assert.equal(rec.kind, 'technique');
+  assert.deepEqual(rec.technique, { drill: 'scale', tonic: 2, mode: 'major' });
+
+  // Octaves ride along only when it's a real number.
+  const withOct = mod.sectionToRecord({
+    ...base, kind: 'technique',
+    technique: { drill: 'scale', tonic: 2, mode: 'minor', octaves: 3 },
+  });
+  assert.equal(withOct.technique.octaves, 3);
+  assert.equal(withOct.technique.mode, 'minor');
+
+  // An unknown mode normalises rather than persisting junk.
+  const oddMode = mod.sectionToRecord({
+    ...base, kind: 'technique',
+    technique: { drill: 'scale', tonic: 2, mode: 'lydian' },
+  });
+  assert.equal(oddMode.technique.mode, 'major');
+
+  // Only whitelisted fields survive — nothing else rides into IDB.
+  const extra = mod.sectionToRecord({
+    ...base, kind: 'technique',
+    technique: { drill: 'scale', tonic: 2, mode: 'major', notes: [1, 2, 3], evil: true },
+  });
+  assert.deepEqual(Object.keys(extra.technique).sort(), ['drill', 'mode', 'tonic']);
+
+  // Malformed or absent specs are dropped entirely.
+  for (const bad of [
+    undefined, null, 'scale', {}, { drill: 'scale' }, { tonic: 2 },
+    { drill: '', tonic: 2 }, { drill: 'scale', tonic: 'x' },
+  ]) {
+    const r = mod.sectionToRecord({ ...base, kind: 'technique', technique: bad });
+    assert.equal('technique' in r, false, `bad spec ${JSON.stringify(bad)} rejected`);
+  }
+
+  // An ordinary phrase section never gains the field.
+  assert.equal('technique' in mod.sectionToRecord(base), false);
+}
+
 // --- exported surface ---
 for (const name of ['openDb', 'listPieceMetadata', 'getPieceBlob',
     'getPieceMusicXmlBlob',

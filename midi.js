@@ -145,6 +145,7 @@ function parseMidi(input) {
   const tempoEvents = [];
   /** @type {Array<{tick:number, numerator:number, denominator:number}>} */
   const timeSignatures = [];
+  const keySignatures = [];
 
   for (let t = 0; t < trackCount && !r.eof(); t++) {
     if (r.chunkId() !== 'MTrk') break; // malformed / trailing junk — stop.
@@ -180,6 +181,15 @@ function parseMidi(input) {
             tick: absTick,
             numerator: data[0],
             denominator: Math.pow(2, data[1]),
+          });
+        } else if (metaType === 0x59 && len >= 2) {
+          // Key signature. First byte is a SIGNED accidental count (-7 flats
+          // .. +7 sharps), second is 0 for major / 1 for minor. Feeds the
+          // technique drills — many exports omit it, so it's best-effort.
+          keySignatures.push({
+            tick: absTick,
+            fifths: (data[0] << 24) >> 24, // sign-extend the byte
+            mode: data[1] === 1 ? 'minor' : 'major',
           });
         } else if (metaType === 0x2f) {
           break; // End of track.
@@ -234,6 +244,7 @@ function parseMidi(input) {
     ticksPerQuarter,
     trackCount,
     timeSignatures,
+    keySignatures,
     durationSec,
     notes,
   };
@@ -578,6 +589,142 @@ function makeDerivedRanges(ranges) {
 }
 
 /**
+ * Order a piece's sections into a sensible PRACTICE PATH — the sequence a
+ * learner should actually work through, which is NOT the storage order. The
+ * auto-split appends every transition and then every run-through AFTER all the
+ * phrase sections (see makeDerivedRanges), so following the raw order would
+ * mean drilling all the seams only once every phrase is already learned.
+ * Instead this interleaves each join with the phrases it connects:
+ *
+ *   1. Phrase sections in playing order (by startTick).
+ *   2. Each TRANSITION right after the second of the two phrases it joins, so
+ *      the seam is drilled while both sides are fresh — S1, S2, T(1+2), S3,
+ *      T(2+3), … A transition is anchored on the LAST phrase it covers.
+ *   3. Run-through (FLUENCY) spans last, shortest first (groups of 4, 8, …,
+ *      then the whole piece), so fluency is assembled progressively — never
+ *      asking for a long run before its phrases and seams have been practised.
+ *
+ * Which phrases a derived section covers is read from its tick window (the
+ * phrases whose onset falls inside [startTick, endTick)), NOT its name — so a
+ * renamed section still sequences correctly. Pure: returns the same section
+ * objects in a new order, with every input section included exactly once.
+ *
+ * @param {Array<object>} sections section records ({id?, kind?, startTick,
+ *   endTick, order?, addedAt?})
+ * @returns {Array<object>} the same objects, reordered into the practice path
+ */
+function buildPracticeSequence(sections) {
+  const all = Array.isArray(sections)
+    ? sections.filter((s) => s && typeof s === 'object')
+    : [];
+  if (all.length <= 1) return all.slice();
+
+  const isTechnique = (s) => s.kind === 'technique';
+  const isTrouble = (s) => s.kind === 'trouble';
+  const isDerived = (s) =>
+    s.kind === 'transition' || s.kind === 'fluency' || isTechnique(s) || isTrouble(s);
+  const byOrder = (a, b) =>
+    (a.order || 0) - (b.order || 0) || (a.addedAt || 0) - (b.addedAt || 0);
+
+  // Technique drills live on their own generated tick grid, so they must stay
+  // out of the phrase list — their [0, n) windows would otherwise shift every
+  // phrase index the transition/fluency anchoring depends on.
+  const phrases = all
+    .filter((s) => !isDerived(s))
+    .sort((a, b) => (a.startTick || 0) - (b.startTick || 0) || byOrder(a, b));
+
+  // The span of phrase indices a derived section covers — the phrases whose
+  // onset falls inside its tick window. { first, last } are -1 when none do.
+  const coverage = (sec) => {
+    let first = -1;
+    let last = -1;
+    for (let i = 0; i < phrases.length; i++) {
+      const onset = phrases[i].startTick || 0;
+      if (onset >= (sec.startTick || 0) && onset < (sec.endTick || 0)) {
+        if (first === -1) first = i;
+        last = i;
+      }
+    }
+    return { first, last };
+  };
+
+  // Transitions anchored on the last phrase they cover → emitted right after
+  // that phrase. Anything whose span can't be resolved falls through to the
+  // defensive tail so it's never dropped.
+  const transAfterPhrase = new Map(); // phraseIndex -> transition[]
+  const orphanDerived = [];
+  for (const t of all.filter((s) => s.kind === 'transition')) {
+    const { last } = coverage(t);
+    if (last < 0) { orphanDerived.push(t); continue; }
+    if (!transAfterPhrase.has(last)) transAfterPhrase.set(last, []);
+    transAfterPhrase.get(last).push(t);
+  }
+  for (const list of transAfterPhrase.values()) {
+    list.sort((a, b) => coverage(a).first - coverage(b).first || byOrder(a, b));
+  }
+
+  // Run-throughs: shortest span first, then by start index, so fluency is
+  // built up rather than thrown at the user full-length first.
+  const fluencySorted = all
+    .filter((s) => s.kind === 'fluency')
+    .map((f) => ({ sec: f, cov: coverage(f) }))
+    .sort((a, b) => {
+      const sa = a.cov.first < 0 ? Infinity : a.cov.last - a.cov.first;
+      const sb = b.cov.first < 0 ? Infinity : b.cov.last - b.cov.first;
+      if (sa !== sb) return sa - sb;
+      if (a.cov.first !== b.cov.first) return a.cov.first - b.cov.first;
+      return byOrder(a.sec, b.sec);
+    })
+    .map((x) => x.sec);
+
+  const seq = [];
+  const seen = new Set();
+  const push = (s) => { if (!seen.has(s)) { seen.add(s); seq.push(s); } };
+
+  // Technique drills open the path as a warm-up — scale and arpeggio in the
+  // piece's key before any of its music, which is how the hands are meant to
+  // be prepared for it.
+  all.filter(isTechnique).sort(byOrder).forEach(push);
+
+  // Then the remedial drills, while attention is freshest: warm up, repair the
+  // known weak spots, and only then play the piece through. Their tick windows
+  // overlap the phrases, which is exactly why they're kept out of the phrase
+  // list — they'd otherwise be counted as phrases in their own right.
+  all.filter(isTrouble)
+    .sort((a, b) => (a.startTick || 0) - (b.startTick || 0) || byOrder(a, b))
+    .forEach(push);
+
+  phrases.forEach((p, i) => {
+    push(p);
+    const after = transAfterPhrase.get(i);
+    if (after) after.forEach(push);
+  });
+  fluencySorted.forEach(push);
+  orphanDerived.sort(byOrder).forEach(push);
+  // Defensive: emit anything still unseen (unexpected kinds) in storage order
+  // so the result is always a complete permutation of the input.
+  all.slice().sort(byOrder).forEach(push);
+
+  return seq;
+}
+
+/**
+ * The section that follows `currentId` in the practice path (see
+ * buildPracticeSequence), or null when the current section is the last step
+ * (or isn't found). Pure.
+ *
+ * @param {Array<object>} sections section records
+ * @param {string} currentId
+ * @returns {object|null}
+ */
+function nextInPracticeSequence(sections, currentId) {
+  const seq = buildPracticeSequence(sections);
+  const i = seq.findIndex((s) => s && s.id === currentId);
+  if (i < 0 || i + 1 >= seq.length) return null;
+  return seq[i + 1];
+}
+
+/**
  * Filter a piece's notes down to a single section's tick window.
  * A note belongs to the section if it starts within [startTick, endTick).
  * Pure helper shared by the player and tests.
@@ -639,6 +786,8 @@ if (typeof module !== 'undefined' && module.exports) {
     pairNotes,
     sectionizeByPhrase,
     makeDerivedRanges,
+    buildPracticeSequence,
+    nextInPracticeSequence,
     notesInSection,
     groupNotesIntoSteps,
   };

@@ -51,13 +51,17 @@ const DB_NAME = 'pianosrs';
 // v5: pieces may carry an optional `musicXmlBlob` (engraved-score source) and
 // a `source` field ('midi' | 'musicxml'). Purely additive — no migration, no
 // data loss; old records simply lack the new fields.
-const DB_VERSION = 5;
+// v6: adds a `mistakes` store — one record per (piece, tick) counting how often
+// a wrong note was played there. Purely additive; nothing else changes.
+const DB_VERSION = 6;
 const STORE_PIECES = 'pieces';
 const STORE_SECTIONS = 'sections';
 const STORE_REP_LOGS = 'repLogs';
+const STORE_MISTAKES = 'mistakes';
 const INDEX_SECTIONS_BY_PIECE = 'byPieceId';
 const INDEX_REP_LOGS_BY_SECTION = 'bySectionId';
 const INDEX_REP_LOGS_BY_DATE = 'byDateISO';
+const INDEX_MISTAKES_BY_PIECE = 'byPieceId';
 
 /** Hard daily goal for a section's successful repetitions. */
 const REP_GOAL = 10;
@@ -105,6 +109,15 @@ function openDb() {
       // v5 → optional `musicXmlBlob` + `source` on piece records. Additive:
       // the existing pieces store already holds them with no schema change, so
       // there is nothing to migrate and no data to clear.
+      // v6 → mistakes store, keyed `${pieceId}|${tick}`, with a byPieceId
+      // index. Keyed on the PIECE rather than the section deliberately: the
+      // same bar is covered by its phrase section, the transitions either side
+      // and every run-through, and a spot you keep fluffing is one weak spot,
+      // not four.
+      if (!db.objectStoreNames.contains(STORE_MISTAKES)) {
+        const mistakes = db.createObjectStore(STORE_MISTAKES, { keyPath: 'id' });
+        mistakes.createIndex(INDEX_MISTAKES_BY_PIECE, 'pieceId', { unique: false });
+      }
     };
     req.onsuccess = (e) => resolve(e.target.result);
     req.onerror = (e) =>
@@ -572,6 +585,114 @@ async function addPracticeTime(sectionId, elapsedMs) {
   });
 }
 
+// --- Mistakes ------------------------------------------------------------
+
+/** Composite key for a mistake tally: one row per (piece, tick). */
+function mistakeId(pieceId, tick) {
+  return `${pieceId}|${Math.round(tick)}`;
+}
+
+/**
+ * Tally one wrong note at `tick` in `pieceId`. Get-then-put in a single
+ * readwrite transaction so concurrent writes can't lose a count.
+ *
+ * Resolves with the new total for that tick.
+ */
+async function recordMistake(pieceId, tick) {
+  if (!pieceId || !Number.isFinite(tick)) return 0;
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_MISTAKES, 'readwrite');
+    const store = tx.objectStore(STORE_MISTAKES);
+    const id = mistakeId(pieceId, tick);
+    const getReq = store.get(id);
+    getReq.onsuccess = () => {
+      const rec = getReq.result
+        || { id, pieceId, tick: Math.round(tick), count: 0, lastAt: 0 };
+      rec.count = (rec.count || 0) + 1;
+      rec.lastAt = Date.now();
+      const putReq = store.put(rec);
+      putReq.onsuccess = () => resolve(rec.count);
+      putReq.onerror = () => reject(putReq.error || new Error('IDB mistake put failed'));
+    };
+    getReq.onerror = () => reject(getReq.error || new Error('IDB mistake get failed'));
+  });
+}
+
+/** All mistake tallies for a piece, ascending by tick. */
+async function listMistakesForPiece(pieceId) {
+  if (!pieceId) return [];
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_MISTAKES, 'readonly');
+    const index = tx.objectStore(STORE_MISTAKES).index(INDEX_MISTAKES_BY_PIECE);
+    const req = index.getAll(pieceId);
+    req.onsuccess = () => {
+      const rows = (req.result || []).slice();
+      rows.sort((a, b) => (a.tick || 0) - (b.tick || 0));
+      resolve(rows);
+    };
+    req.onerror = () => reject(req.error || new Error('IDB mistake list failed'));
+  });
+}
+
+/** Drop every mistake tally for a piece (piece deletion, or a manual reset). */
+async function deleteMistakesForPiece(pieceId) {
+  if (!pieceId) return;
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_MISTAKES, 'readwrite');
+    const store = tx.objectStore(STORE_MISTAKES);
+    const index = store.index(INDEX_MISTAKES_BY_PIECE);
+    const req = index.getAllKeys(pieceId);
+    req.onsuccess = () => {
+      for (const key of req.result || []) store.delete(key);
+    };
+    req.onerror = () => reject(req.error || new Error('IDB mistake clear failed'));
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('IDB mistake clear failed'));
+  });
+}
+
+/**
+ * Merge a patch of tempo fields onto a section record via get-then-put in a
+ * single readwrite transaction (so a concurrent practice-time write in another
+ * tab can't clobber it). Only `targetTempo`, `bestCleanTempo`, and
+ * `workingTempo` are honoured; non-positive / non-finite values are ignored.
+ *
+ * Resolves with the updated record (or null if the section is gone). A no-op
+ * (empty / all-invalid patch) resolves without writing.
+ */
+async function updateSectionTempo(sectionId, patch) {
+  if (!sectionId || !patch || typeof patch !== 'object') return null;
+  const allowed = ['targetTempo', 'bestCleanTempo', 'workingTempo'];
+  const clean = {};
+  for (const k of allowed) {
+    const v = patch[k];
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+      clean[k] = Math.round(v);
+    }
+  }
+  if (Object.keys(clean).length === 0) return null;
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_SECTIONS, 'readwrite');
+    const store = tx.objectStore(STORE_SECTIONS);
+    const getReq = store.get(sectionId);
+    getReq.onsuccess = () => {
+      const rec = getReq.result;
+      if (!rec) { resolve(null); return; }
+      Object.assign(rec, clean);
+      const putReq = store.put(rec);
+      putReq.onsuccess = () => resolve(rec);
+      putReq.onerror = () =>
+        reject(putReq.error || new Error('IDB tempo put failed'));
+    };
+    getReq.onerror = () =>
+      reject(getReq.error || new Error('IDB tempo get failed'));
+  });
+}
+
 // --- Pure helpers (importable + testable in Node) ------------------------
 
 /**
@@ -654,9 +775,25 @@ function sectionToRecord(section) {
     order: typeof section.order === 'number' ? section.order : addedAt,
   };
   // Optional section kind — 'fluency' marks the auto-generated combined
-  // run-through section; absent on ordinary phrase sections.
+  // run-through section; 'technique' marks a generated scale/arpeggio/cadence
+  // drill; absent on ordinary phrase sections.
   if (typeof section.kind === 'string' && section.kind) {
     record.kind = section.kind;
+  }
+  // Technique drills carry a small spec instead of tick-window notes — the
+  // actual note array is regenerated from this at practice time rather than
+  // stored, so the record stays tiny and the generator stays the source of
+  // truth. Copied field-by-field so nothing unexpected reaches IDB.
+  if (section.technique && typeof section.technique === 'object') {
+    const t = section.technique;
+    if (typeof t.drill === 'string' && t.drill && Number.isFinite(t.tonic)) {
+      record.technique = {
+        drill: t.drill,
+        tonic: Math.round(t.tonic),
+        mode: t.mode === 'minor' ? 'minor' : 'major',
+      };
+      if (Number.isFinite(t.octaves)) record.technique.octaves = Math.round(t.octaves);
+    }
   }
 
   // Optional SRS fields — only carried through when present + well-formed,
@@ -702,6 +839,17 @@ function sectionToRecord(section) {
     section.lastPracticedAt > 0
   ) {
     record.lastPracticedAt = section.lastPracticedAt;
+  }
+  // Tempo goals — all optional + only carried through when present + valid, so
+  // legacy records and plain edits neither gain nor clobber them.
+  //   targetTempo    BPM the user is working up to (user-set)
+  //   bestCleanTempo fastest BPM a clean run was completed at (auto-tracked)
+  //   workingTempo   BPM last practised at, so the metronome restores it
+  for (const field of ['targetTempo', 'bestCleanTempo', 'workingTempo']) {
+    const v = section[field];
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+      record[field] = Math.round(v);
+    }
   }
   return record;
 }
@@ -1114,6 +1262,11 @@ if (typeof module !== 'undefined' && module.exports) {
     listRepLogsForSection,
     listAllRepLogs,
     addPracticeTime,
+    updateSectionTempo,
+    mistakeId,
+    recordMistake,
+    listMistakesForPiece,
+    deleteMistakesForPiece,
     exportLibrary,
     importLibrary,
     arrayBufferToBase64,

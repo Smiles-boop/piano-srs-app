@@ -306,6 +306,13 @@ function annotateFingerings(notes, opts = {}) {
 const LANDMARK_LEAP_SEMITONES = 12;
 
 /**
+ * Leap (semitones) past which a landmark is "very distant" — a jump so far that
+ * a finger number alone won't tell you where to land. These get a letter marking
+ * (the target note's name) engraved in the score view. An octave and a half.
+ */
+const DISTANT_LANDMARK_SEMITONES = 18;
+
+/**
  * Flag the "landmark" notes — the sparse subset where a fingering reminder is
  * genuinely useful, so the score isn't cluttered with a number on every note.
  *
@@ -339,13 +346,15 @@ function flagFingeringLandmarks(notes, opts = {}) {
     let prev = null;
     let lastMark = -Infinity;
     for (const n of arr) {
+      n.fingerLandmarkDistant = false;
       let strong = false;
       let shift = false;
+      const leap = prev ? Math.abs(n.midi - prev.midi) : 0;
       if (!prev) {
         strong = true; // hand entry
       } else {
         if (n.startTick - prev.endTick >= restGap) strong = true; // re-entry
-        if (Math.abs(n.midi - prev.midi) >= LANDMARK_LEAP_SEMITONES) shift = true;
+        if (leap >= LANDMARK_LEAP_SEMITONES) shift = true;
         if (n.finger === 1 && prev.finger && prev.finger !== 1 && n.midi !== prev.midi) {
           shift = true; // thumb tuck / cross
         }
@@ -354,6 +363,9 @@ function flagFingeringLandmarks(notes, opts = {}) {
       if (mark) {
         n.fingerLandmark = true;
         lastMark = n.startTick;
+        // A very distant leap also earns a letter marking — the finger alone
+        // can't say where to land when the jump is this far.
+        if (leap >= DISTANT_LANDMARK_SEMITONES) n.fingerLandmarkDistant = true;
       }
       prev = n;
     }

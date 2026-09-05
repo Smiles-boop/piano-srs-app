@@ -431,6 +431,260 @@ function dueForecast({ sections, todayISO, days = 7 }) {
   return buckets;
 }
 
+// --- Timed session planning ----------------------------------------------
+//
+// "I have N minutes — what should I practice?" The planner packs a session:
+// due reviews first (most-overdue first, straight from buildReviewQueue's
+// ordering), then brand-new sections to learn with whatever budget is left.
+// Everything here is pure — the caller supplies today's date, rep counts,
+// and lifetime rep totals, so the planner is deterministic and testable.
+//
+// Time estimates: a section's session cost is (average ms per rep) × the rep
+// goal. The per-rep average comes from the section's own history
+// (totalPracticeMs / lifetime reps) when it has one; otherwise we fall back
+// to flat defaults — new sections get a bigger default than reviews because
+// first-time learning is slower than re-polishing.
+
+/** Fallback estimate for reviewing a section with no practice history. */
+const SESSION_DEFAULT_REVIEW_MS = 4 * 60000;
+/** Fallback estimate for learning a brand-new section. */
+const SESSION_DEFAULT_NEW_MS = 6 * 60000;
+/** Per-rep average clamp — keeps a weird history (left the timer running
+ * overnight, or two-second click-through reps) from poisoning the plan. */
+const SESSION_MS_PER_REP_MIN = 5000;
+const SESSION_MS_PER_REP_MAX = 120000;
+/** Whole-section estimate clamp. */
+const SESSION_ESTIMATE_MIN_MS = 90000;
+const SESSION_ESTIMATE_MAX_MS = 20 * 60000;
+
+/**
+ * Pure: estimate how long one practice session on `section` will take, in ms.
+ *
+ * @param {object|null|undefined} section  section record (totalPracticeMs used)
+ * @param {object} [opts]
+ * @param {number} [opts.repGoal=10]       reps needed to finish the section
+ * @param {number} [opts.lifetimeReps=0]   total reps ever logged on it
+ * @param {boolean} [opts.isNew=false]     never rated → learning, not review
+ */
+function estimateSectionSessionMs(section, { repGoal = 10, lifetimeReps = 0, isNew = false } = {}) {
+  const goal = Number.isFinite(repGoal) && repGoal > 0 ? Math.floor(repGoal) : 10;
+  const totalMs =
+    section && typeof section.totalPracticeMs === 'number' && section.totalPracticeMs > 0
+      ? section.totalPracticeMs
+      : 0;
+  const reps = Number.isFinite(lifetimeReps) && lifetimeReps > 0 ? Math.floor(lifetimeReps) : 0;
+  if (totalMs > 0 && reps > 0) {
+    const perRep = Math.min(
+      SESSION_MS_PER_REP_MAX,
+      Math.max(SESSION_MS_PER_REP_MIN, totalMs / reps),
+    );
+    return Math.round(
+      Math.min(SESSION_ESTIMATE_MAX_MS, Math.max(SESSION_ESTIMATE_MIN_MS, perRep * goal)),
+    );
+  }
+  return isNew ? SESSION_DEFAULT_NEW_MS : SESSION_DEFAULT_REVIEW_MS;
+}
+
+/**
+ * Pure: pack a practice session into a time budget.
+ *
+ * Fill order:
+ *   1. Due reviews, in buildReviewQueue order (most overdue first). A review
+ *      that doesn't fit the remaining budget is skipped, but later (cheaper)
+ *      reviews may still fit — the goal is maximum review coverage inside
+ *      the box.
+ *   2. Never-rated ("new") sections with the leftover budget, in the order
+ *      given (or the order `orderNewSections` returns).
+ *
+ * If nothing fits at all but there is work to do, the single highest-priority
+ * item is included anyway — a plan should never be empty while work exists,
+ * even on a 5-minute budget.
+ *
+ * @param {object} args
+ * @param {Array<object>} args.sections   raw section records (whole library)
+ * @param {Map|Array|Object} args.piecesById   piece lookup (as buildReviewQueue)
+ * @param {Map|Object} args.repCountsToday     today's rep counts by sectionId
+ * @param {Map|Object} [args.lifetimeRepCounts] lifetime rep totals by sectionId
+ * @param {string} args.todayISO           YYYY-MM-DD
+ * @param {number} args.minutes            the user's time budget
+ * @param {number} [args.repGoal=10]
+ * @param {(candidates: Array<object>) => Array<object>} [args.orderNewSections]
+ *     optional hook to order the new-section candidates (e.g. practice-path
+ *     order); receives raw section records, returns them reordered.
+ * @returns {{
+ *   budgetMs: number,
+ *   totalMs: number,
+ *   items: Array<{
+ *     type: 'review'|'new',
+ *     section: object,
+ *     piece: {id: string, title: string},
+ *     estimateMs: number,
+ *     nextDue: string|null,
+ *     daysOff: number|null,
+ *     repCount: number,
+ *   }>,
+ *   dueTotal: number, dueIncluded: number,
+ *   newAvailable: number, newIncluded: number,
+ * }}
+ */
+function buildSessionPlan({
+  sections,
+  piecesById,
+  repCountsToday,
+  lifetimeRepCounts,
+  todayISO,
+  minutes,
+  repGoal = 10,
+  orderNewSections,
+}) {
+  if (!isISODate(todayISO)) {
+    throw new Error(`buildSessionPlan: invalid todayISO "${todayISO}"`);
+  }
+  const goal = Number.isFinite(repGoal) && repGoal > 0 ? Math.floor(repGoal) : 10;
+  const mins = Number.isFinite(minutes) && minutes > 0 ? minutes : 0;
+  const budgetMs = Math.round(mins * 60000);
+
+  const empty = {
+    budgetMs,
+    totalMs: 0,
+    items: [],
+    dueTotal: 0,
+    dueIncluded: 0,
+    newAvailable: 0,
+    newIncluded: 0,
+  };
+  if (!Array.isArray(sections) || sections.length === 0) return empty;
+
+  const lifetimeLookup = (() => {
+    if (lifetimeRepCounts instanceof Map) {
+      return (id) => Number(lifetimeRepCounts.get(id) || 0) || 0;
+    }
+    if (lifetimeRepCounts && typeof lifetimeRepCounts === 'object') {
+      return (id) => Number(lifetimeRepCounts[id] || 0) || 0;
+    }
+    return () => 0;
+  })();
+  const repLookup = (() => {
+    if (repCountsToday instanceof Map) {
+      return (id) => Number(repCountsToday.get(id) || 0) || 0;
+    }
+    if (repCountsToday && typeof repCountsToday === 'object') {
+      return (id) => Number(repCountsToday[id] || 0) || 0;
+    }
+    return () => 0;
+  })();
+  const pieceLookup = (() => {
+    if (piecesById instanceof Map) return (id) => piecesById.get(id) || null;
+    if (Array.isArray(piecesById)) {
+      const m = new Map();
+      for (const p of piecesById) {
+        if (p && typeof p.id === 'string') m.set(p.id, p);
+      }
+      return (id) => m.get(id) || null;
+    }
+    if (piecesById && typeof piecesById === 'object') {
+      return (id) => piecesById[id] || null;
+    }
+    return () => null;
+  })();
+
+  // 1. Due reviews (already sorted most-overdue first and filtered to
+  //    not-done-today by buildReviewQueue).
+  const dueItems = buildReviewQueue({
+    sections,
+    piecesById,
+    repCountsToday,
+    todayISO,
+    repGoal: goal,
+  }).map((it) => ({
+    type: 'review',
+    section: it.section,
+    piece: it.piece,
+    estimateMs: estimateSectionSessionMs(it.section, {
+      repGoal: goal,
+      lifetimeReps: lifetimeLookup(it.section.id),
+      isNew: false,
+    }),
+    nextDue: it.nextDue,
+    daysOff: it.daysOff,
+    repCount: it.repCount,
+  }));
+
+  // 2. New-section candidates: never rated, not already finished today.
+  const dueIds = new Set(dueItems.map((it) => it.section.id));
+  let newCandidates = [];
+  for (const section of sections) {
+    if (!section || typeof section !== 'object') continue;
+    if (dueIds.has(section.id)) continue;
+    const srs = srsStateForSection(section);
+    if (srs.lastReviewedDate || srs.nextDue) continue; // already in rotation
+    if (repLookup(section.id) >= goal) continue; // finished today
+    newCandidates.push(section);
+  }
+  if (typeof orderNewSections === 'function' && newCandidates.length > 0) {
+    const ordered = orderNewSections(newCandidates.slice());
+    if (Array.isArray(ordered)) newCandidates = ordered;
+  }
+  const newItems = newCandidates.map((section) => ({
+    type: 'new',
+    section,
+    piece: pieceLookup(section.pieceId) || {
+      id: section.pieceId || '',
+      title: '(unknown piece)',
+    },
+    estimateMs: estimateSectionSessionMs(section, {
+      repGoal: goal,
+      lifetimeReps: lifetimeLookup(section.id),
+      isNew: true,
+    }),
+    nextDue: null,
+    daysOff: null,
+    repCount: repLookup(section.id),
+  }));
+
+  // First-fit fill: reviews claim the budget first, new sections take the rest.
+  const items = [];
+  let totalMs = 0;
+  let dueIncluded = 0;
+  let newIncluded = 0;
+  for (const it of dueItems) {
+    if (totalMs + it.estimateMs <= budgetMs) {
+      items.push(it);
+      totalMs += it.estimateMs;
+      dueIncluded += 1;
+    }
+  }
+  for (const it of newItems) {
+    if (totalMs + it.estimateMs <= budgetMs) {
+      items.push(it);
+      totalMs += it.estimateMs;
+      newIncluded += 1;
+    }
+  }
+
+  // Never return an empty plan while there's work and a real budget: take the
+  // single highest-priority item even if it overflows the box.
+  if (items.length === 0 && budgetMs > 0) {
+    const first = dueItems[0] || newItems[0];
+    if (first) {
+      items.push(first);
+      totalMs = first.estimateMs;
+      if (first.type === 'review') dueIncluded = 1;
+      else newIncluded = 1;
+    }
+  }
+
+  return {
+    budgetMs,
+    totalMs,
+    items,
+    dueTotal: dueItems.length,
+    dueIncluded,
+    newAvailable: newItems.length,
+    newIncluded,
+  };
+}
+
 /**
  * A section is "mastered" once its scheduled interval has stretched out to
  * three weeks or more. Three weeks is a deliberate floor:
@@ -870,6 +1124,10 @@ if (typeof module !== 'undefined' && module.exports) {
     previewSm2Outcomes,
     buildReviewQueue,
     dueForecast,
+    SESSION_DEFAULT_REVIEW_MS,
+    SESSION_DEFAULT_NEW_MS,
+    estimateSectionSessionMs,
+    buildSessionPlan,
     isSectionMastered,
     computeDailyStreak,
     computeLongestStreak,

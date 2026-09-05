@@ -133,6 +133,7 @@ function parseMusicXml(xml) {
       divisions: 1,
       ticksPerQuarter: DERIVED_TPQ,
       durationSec: 0,
+      keySignature: null,
     };
   }
 
@@ -143,6 +144,11 @@ function parseMusicXml(xml) {
   let ignoreRest = false;      // true once a SECOND part starts
   let tempo = 120;             // quarter-notes per minute (first <sound tempo>)
   let sawTempo = false;
+  // Opening key signature, from the first <attributes><key>. A notated key is
+  // far more reliable than inferring one from the notes, so the technique
+  // drills prefer it — see resolveKey in technique.js.
+  let keyFifths = null;
+  let keyMode = null;
 
   const measures = [];
   const notes = [];            // derived parseMidi-compatible note objects
@@ -251,6 +257,12 @@ function parseMusicXml(xml) {
       if (top === 'divisions') {
         const d = parseInt(v, 10);
         if (Number.isFinite(d) && d > 0) divisions = d;
+      } else if (top === 'fifths' && parent === 'key' && keyFifths === null) {
+        const f = parseInt(v, 10);
+        if (Number.isFinite(f) && f >= -7 && f <= 7) keyFifths = f;
+      } else if (top === 'mode' && parent === 'key' && keyMode === null) {
+        const m = v.toLowerCase();
+        if (m === 'major' || m === 'minor') keyMode = m;
       } else if (top === 'beats') {
         beats = parseInt(v, 10) || beats;
       } else if (top === 'beat-type') {
@@ -312,6 +324,9 @@ function parseMusicXml(xml) {
                   // Character index of this note's `</note>` in the source XML,
                   // so fingerings can be spliced back in for the score view.
                   injectAt: tok.start,
+                  // The note's letter (A–G), used to engrave a letter marking on
+                  // very distant landmark notes (see injectFingerings).
+                  step: noteStep,
                 };
                 // Preserve the score's own fingering when it provides one.
                 if (noteScoreFinger != null) note.scoreFinger = noteScoreFinger;
@@ -374,7 +389,13 @@ function parseMusicXml(xml) {
   let durationSec = 0;
   for (const n of notes) if (n.endSec > durationSec) durationSec = n.endSec;
 
-  return { measures, notes, divisions, ticksPerQuarter: DERIVED_TPQ, durationSec };
+  const keySignature =
+    keyFifths === null ? null : { fifths: keyFifths, mode: keyMode || undefined };
+
+  return {
+    measures, notes, divisions, ticksPerQuarter: DERIVED_TPQ, durationSec,
+    keySignature,
+  };
 }
 
 /**
@@ -420,11 +441,18 @@ function measuresForSection(parsed, section, ticksPerQuarter) {
  * engrave them natively. Only notes flagged `fingerLandmark` get a number, so
  * the score stays readable — and notes that already carry the score's own
  * `scoreFinger` are skipped, since OSMD renders those straight from the source
- * (the human fingering always wins). Each note carries an `injectAt` index (the
- * offset of its `</note>` in the original XML, set by parseMusicXml); we insert
- * a `<notations><technical><fingering>` there, splicing from the end so earlier
- * offsets stay valid. Returns the original XML unchanged if there's nothing to
- * add. Pure.
+ * (the human fingering always wins).
+ *
+ * Notes flagged `fingerLandmarkDistant` (a very far leap) additionally get a
+ * letter marking — the target note's name engraved as a `<lyric>` — so you can
+ * see *where* to jump, not just which finger to use. The letter is shown even
+ * when the finger comes from the score, since it's a separate cue.
+ *
+ * Each note carries an `injectAt` index (the offset of its `</note>` in the
+ * original XML, set by parseMusicXml); we insert there, splicing from the end so
+ * earlier offsets stay valid. The fingering `<notations>` precedes the `<lyric>`
+ * to keep MusicXML's note-content order. Returns the original XML unchanged if
+ * there's nothing to add. Pure.
  *
  * @param {string} xml    the same XML string parseMusicXml consumed
  * @param {Array<object>} notes  parseMusicXml notes, fingered + landmark-flagged
@@ -433,18 +461,29 @@ function injectFingerings(xml, notes) {
   if (typeof xml !== 'string' || !Array.isArray(notes)) return xml;
   const points = [];
   for (const n of notes) {
-    if (!n || !n.fingerLandmark) continue;
-    if (n.scoreFinger != null) continue; // the score already shows its own
-    if (typeof n.injectAt !== 'number') continue;
-    if (!(n.finger >= 1 && n.finger <= 5)) continue;
-    points.push({ at: n.injectAt, finger: n.finger });
+    if (!n || typeof n.injectAt !== 'number') continue;
+    // A suggested finger to engrave (the score's own always wins, so skip those).
+    const finger =
+      n.fingerLandmark && n.scoreFinger == null && n.finger >= 1 && n.finger <= 5
+        ? n.finger
+        : null;
+    // A letter to engrave on very distant landmarks.
+    const letter =
+      n.fingerLandmarkDistant && typeof n.step === 'string' ? n.step : null;
+    if (finger == null && letter == null) continue;
+    points.push({ at: n.injectAt, finger, letter });
   }
   if (!points.length) return xml;
   points.sort((a, b) => b.at - a.at); // splice back-to-front
   let out = xml;
   for (const p of points) {
-    const tag =
-      `<notations><technical><fingering>${p.finger}</fingering></technical></notations>`;
+    let tag = '';
+    if (p.finger != null) {
+      tag += `<notations><technical><fingering>${p.finger}</fingering></technical></notations>`;
+    }
+    if (p.letter != null) {
+      tag += `<lyric number="1"><syllabic>single</syllabic><text>${p.letter}</text></lyric>`;
+    }
     out = out.slice(0, p.at) + tag + out.slice(p.at);
   }
   return out;

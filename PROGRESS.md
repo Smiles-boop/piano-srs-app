@@ -1,5 +1,39 @@
 # Progress log
 
+## 2026-08-19 — Whole-piece Listen + Play through (piece page)
+
+**Built today**
+
+- **Whole piece row** under the piece title (`#piece-actions`): **▶ Listen** and **🎹 Play through**. Hidden while a section is being practised (the practice panel has its own Listen); disabled for a piece with no notes.
+- **▶ Listen (whole piece):** synth playback of every note of the piece, with a `0:12 / 1:34` readout + thin progress bar, and the engraved-score cursor walking along step by step. `L` toggles it on the piece page; `Esc`, ■ Stop, switching piece, or Home stops it. Independent of the practice player, so it needs no practice panel.
+- **🎹 Play through:** opens the practice panel on a *synthetic* whole-piece section (`kind: 'piece'`, sentinel id `PIECE_RUN_ID`) in a new **lenient run mode** — wait mode still waits for each correct note, but a wrong note is flashed + counted (and still fed to the trouble-spot tally, since it's a real place in the piece) instead of resetting the run; reaching the end reports the slip count. Nothing is banked: no rep logs, no SM-2 / rating prompt, no practice-time / tempo writes. The panel drops the rep counter, Reset-today, tempo goal and Up-next rail (`.practice-panel.is-piece-run`), the eyebrow reads "Playing through", and a status line keeps a session tally (play-throughs · best). Memory fade is pinned to Watch. Any section practice already open is closed first, and opening a section closes a play-through.
+- **Listen follows along everywhere:** the practice panel's Listen (sections and the whole piece) now moves the sheet cursor with each sounding step, scrolls the Synthesia playhead, and lights the keys (`is-playing`, sky) as they sound — previously it was audio only.
+
+**Files changed**
+
+- `playback.js` — **new**: `createPiecePlayback({audioContext?, onStep, onTime, onEnd})` → `play(notes, {ticksPerQuarter, fromSec})`, `stop`, `isPlaying`, `getPosition`, `dispose`; pure `buildPlaybackTimeline`. Triangle voice per note through a master gain + compressor (dense chords no longer clip); a 30 ms timer clock (not rAF, so following survives a background tab); the steps it reports are the same `groupNotesIntoSteps` groups wait mode grades, so cursor positions match practice exactly.
+- `player.js` — Listen re-routed through the engine (shares the player's AudioContext); `listenTick` drives the playhead / dimming; `onProgress` gets `listening: true` steps; `load(..., {strict:false})` → `handleSlip` (tally, no reset) + end-of-run slip report; `onMistake` info carries `reset: true|false`; `onRepComplete` carries `strict`/`mistakes`; new `stopListen` / `isListening` on the API; a load now clears stale feedback and stops any playback.
+- `app.js` — element refs; `PIECE_RUN_ID`, `piecePlayback`; `renderPieceActions`, `wholePieceSection`, `isPieceRun`, `ensurePiecePlayback`, `togglePieceListen` / `startPieceListen` / `stopPieceListen` / `isPieceListening`, `renderPieceListenUI` / `renderPieceListenProgress`, `openPieceRun`; guards in `getActiveSection`, `mountPlayer` (strict flag, lenient mistake handling, memory stage 0), `syncSheetToSection` (no highlight band for the whole piece), `recordCleanRun` (session tally instead of a rep), `closePracticeView` (no practice-time write, class reset), `renderPracticePanel` (piece-run branch), `renderUpNext`, `renderTempoGoal`, `persistWorkingTempo`; `openPracticeView` / `selectPiece` / `goHome` stop a whole-piece Listen; `L` / `Esc` shortcuts; wiring in `init`. `APP_VERSION` → 0.23.0.
+- `index.html` — whole-piece row in the viewer header; ids on the practice eyebrow / compact row / secondary actions; `playback.js` script tag (before `player.js`); footer → v0.23.0.
+- `styles.css` — `.piece-actions` row (own line under the title, wraps), listen progress readout/bar, `.is-active` Listen button, `.player-key.is-playing`, `.practice-panel.is-piece-run` hides the review scaffolding, header `flex-wrap`.
+- `tests/playback.test.mjs` — new: timeline builder (base / clamp / floor / malformed), engine lifecycle through a mock AudioContext with a controllable clock (scheduling, step firing once and in order, position, supersede-on-replay, natural end, idle stop, borrowed vs owned context on dispose).
+- `README.md`, `HOW_TO_RUN.md` — the two new actions + the shortcut notes.
+
+**Verification**
+
+- `node --check` on `app.js` / `player.js` / `playback.js`; full `tests/*.mjs` suite green (incl. the new `playback.test.mjs`).
+- In-browser (localhost:8092, curated library, Burgmüller Arabesque): the row renders under the title on desktop and at 375 px with no horizontal overflow; Listen plays with the readout advancing (0:07 → 0:14 / 0:32), the OSMD cursor visible and moving down the score, `Esc` stops and clears; Play through opens the panel in piece mode (eyebrow, hidden rep/tempo/up-next/reset UI, "Note 1 of 140"), a wrong note keeps the position ("Note 2 of 140", "1 so far this run", trouble tally +1), driving all 140 steps ends with "✓ Played to the end — 1 wrong note" and a session tally, no rep logged; the player's Listen inside the run moves the cursor and lights keys, and stopping it returns the cursor to the run's step; `Esc` closes the run and restores the row; a normal section practice still resets strictly on a wrong note. Test mistake records deleted afterwards. No console errors.
+
+**Design decisions**
+
+- **Play-through is lenient on purpose.** A strict reset over 140+ steps is unplayable, and the auto-split already provides the strict, SRS-scheduled *Run-through (Sections 1–N)* section — the new action is for reading / performing the piece, not for banking reps. Slips still feed the trouble-spot tally because they're real places in the piece.
+- **A synthetic section rather than a special-cased panel** keeps the play-through on the same engine, hand toggle, mic/computer-key inputs, metronome and sheet sync as ordinary practice; a sentinel id + a handful of guards keep IDB untouched.
+- **One playback engine for both Listens** (piece page and practice panel) so the follow-cursor behaviour is identical and the synth sound is defined once; the practice player lends its own AudioContext so the mic-suppression and key-ping paths keep working.
+
+**Next suggested step**
+
+- A speed control on Listen (½× / ¾×) for slow read-throughs, and letting the play-through start from a clicked bar on the score.
+
 ## 2026-06-10 — Items 30–37 (Personal home dashboard)
 
 **Built today**
